@@ -98,6 +98,7 @@ mut:
 	slider_specs        map[u64]SliderSpec // NSSlider pointer -> range behavior
 	control_change_ids  map[u64]string // NSTextField pointer -> change event id
 	observed            map[u64]bool // clip views we already observe for scroll changes
+	pending_scroll      map[string]f64 // Scroll element id -> offset to apply once it exists
 	run_config          RunConfig
 	screenshot_pending  bool
 	screenshot_captured bool
@@ -122,6 +123,7 @@ const runtime_state_singleton = &RuntimeState{
 	textview_ids: map[u64]string{}
 	textview_action_ids: map[u64]string{}
 	scroll_ids: map[u64]string{}
+	pending_scroll: map[string]f64{}
 	pointer_ids: map[u64]string{}
 	pointer_draggable: map[u64]bool{}
 	cursor_ids: map[u64]string{}
@@ -316,6 +318,35 @@ pub fn scroll_to_rect(id string, x f64, y f64, width f64, height f64) {
 		return
 	}
 	macos.msg_void_rect(doc, 'scrollRectToVisible:', macos.rect(x, y, width, height))
+}
+
+// scroll_to_offset puts a Scroll element at the given vertical offset. Asking for a
+// position before the element exists is the ordinary case — a screen that opens where
+// it was last left knows the offset while it is still building its first tree — so the
+// request is kept and carried out when the element is created.
+pub fn scroll_to_offset(id string, offset f64) {
+	mut st := state()
+	if id.len == 0 {
+		return
+	}
+	st.pending_scroll[id] = offset
+	apply_scroll_offset(mut st, id)
+}
+
+fn apply_scroll_offset(mut st RuntimeState, id string) {
+	offset := st.pending_scroll[id] or { return }
+	scrollv := st.views[id] or { return }
+	doc := macos.msg_id(scrollv, 'documentView')
+	if native_is_nil(doc) {
+		return
+	}
+	clip := macos.msg_id(scrollv, 'contentView')
+	height := macos.msg_rect(clip, 'bounds').height
+	// A rect as tall as the visible area lands its top edge at the top of the view,
+	// which is the offset that was asked for. The scroll view clamps it to the
+	// document, so an offset past the end settles at the end.
+	macos.msg_void_rect(doc, 'scrollRectToVisible:', macos.rect(0, offset, 1, height))
+	st.pending_scroll.delete(id)
 }
 
 pub fn text(id string) string {
@@ -1092,6 +1123,11 @@ fn render_element(parent NativeView, el Element, key string, mut active map[stri
 		st.views[el.id] = native
 		st.view_keys[el.id] = key
 		st.view_kinds[el.id] = el.kind
+		if el.kind == .scroll {
+			// The element exists now, so a position asked for before it did can finally
+			// be taken up.
+			apply_scroll_offset(mut st, el.id)
+		}
 	}
 	st.node_declared_text[key] = el.text
 	st.node_content_sig[key] = content_sig
@@ -1786,9 +1822,36 @@ fn native_update_label(label_view NativeView, frame NativeRect, text string, tex
 		native_control_set_attributed_title(label_view, text, text_hex, size, bold, italic, underline)
 	}
 	macos.msg_void_i64(label_view, 'setAlignment:', i64(align))
-	cell := macos.msg_id(label_view, 'cell')
-	macos.msg_void_i64(cell, 'setLineBreakMode:', 4)
-	macos.msg_void_bool(cell, 'setUsesSingleLineMode:', lines == 1)
+	native_apply_line_limit(label_view, lines)
+	// Only NSTextField carries a line budget; an NSButton has none to set.
+	macos.msg_void_i64(label_view, 'setMaximumNumberOfLines:', i64(if lines > 1 {
+		lines
+	} else {
+		1
+	}))
+}
+
+// NSLineBreakMode values.
+const ns_line_break_by_word_wrapping = 0
+const ns_line_break_by_truncating_tail = 4
+
+// Give a control its line budget. One line means whatever does not fit is truncated,
+// which is what a button title and an ordinary label want. More than one line only
+// means anything if the text may flow onto them, so the break mode has to change with
+// it: left at truncate-tail, a multi-line label still laid its text out on one line
+// and clipped the rest, and asking for more lines did nothing.
+fn native_apply_line_limit(view NativeView, lines int) {
+	single := lines <= 1
+	cell := macos.msg_id(view, 'cell')
+	macos.msg_void_i64(cell, 'setLineBreakMode:', if single {
+		ns_line_break_by_truncating_tail
+	} else {
+		ns_line_break_by_word_wrapping
+	})
+	macos.msg_void_bool(cell, 'setUsesSingleLineMode:', single)
+	// Wrapped text that outgrows its budget ends in an ellipsis rather than being cut
+	// off mid-line.
+	macos.msg_void_bool(cell, 'setTruncatesLastVisibleLine:', !single)
 }
 
 fn native_new_button(frame NativeRect, title string, box BoxStyle, text_hex u32, size f64, bold bool, italic bool, underline bool, lines int, image_name string, native_style bool) NativeView {
@@ -1814,9 +1877,7 @@ fn native_update_button(button_view NativeView, frame NativeRect, title string, 
 		native_set_box_background(button_view, box)
 		native_set_corner_radius(button_view, box.radius)
 	}
-	cell := macos.msg_id(button_view, 'cell')
-	macos.msg_void_i64(cell, 'setLineBreakMode:', 4)
-	macos.msg_void_bool(cell, 'setUsesSingleLineMode:', lines == 1)
+	native_apply_line_limit(button_view, lines)
 	native_update_button_image(button_view, frame, image_name)
 	native_clear_control_state(button_view)
 }

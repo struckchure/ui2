@@ -141,6 +141,7 @@ fn C.ui2_win_scroll_message(hwnd voidptr, wparam usize) int
 fn C.ui2_win_scroll_wheel(hwnd voidptr, wparam usize) int
 
 fn C.ui2_win_scroll_to_rect(hwnd voidptr, top int, bottom int) int
+fn C.ui2_win_set_scroll_position(hwnd voidptr, position int) int
 
 fn C.ui2_win_capture_mouse(hwnd voidptr)
 
@@ -256,6 +257,7 @@ mut:
 	toggle_ids         map[u64]string
 	toggle_views       map[u64]voidptr
 	scroll_positions   map[string]int
+	pending_scroll     map[string]int // Scroll element id -> offset to apply when it renders
 	run_config         WindowsRunConfig
 	rendering          bool
 	key_consumed       bool
@@ -303,6 +305,7 @@ const windows_state_singleton = &WindowsState{
 	toggle_ids: map[u64]string{}
 	toggle_views: map[u64]voidptr{}
 	scroll_positions: map[string]int{}
+	pending_scroll: map[string]int{}
 	suppress_click: map[u64]bool{}
 }
 
@@ -687,6 +690,31 @@ pub fn scroll_offset(id string) f64 {
 	return f64(st.scroll_positions[key] or { 0 })
 }
 
+// scroll_to_offset puts a Scroll element at the given vertical offset. An element on
+// screen moves at once. One that does not exist yet has no range to clamp against, so
+// the request is kept and taken up the next time the element is laid out — that is
+// what lets a screen open where it was last left.
+pub fn scroll_to_offset(id string, offset f64) {
+	mut st := windows_state()
+	if id.len == 0 {
+		return
+	}
+	wanted := if offset < 0 { 0 } else { int(offset) }
+	if (st.view_kinds[id] or { Kind.view }) == .scroll {
+		key := st.view_keys[id] or { '' }
+		if key.len > 0 {
+			if hwnd := st.views[id] {
+				position := C.ui2_win_set_scroll_position(hwnd, wanted)
+				st.scroll_positions[key] = position
+				windows_reposition_scroll_children(key, position)
+				st.pending_scroll.delete(id)
+				return
+			}
+		}
+	}
+	st.pending_scroll[id] = wanted
+}
+
 pub fn scroll_to_rect(id string, _x f64, y f64, _width f64, height f64) {
 	mut st := windows_state()
 	key := st.view_keys[id] or { return }
@@ -784,7 +812,14 @@ fn windows_render_element(parent voidptr, el Element, key string, parent_key str
 	if el.children.len > 0 {
 		if el.kind == .scroll {
 			content_height := windows_content_height(el.children)
-			position := C.ui2_win_set_scroll(hwnd, content_height, st.scroll_positions[key] or { 0 })
+			mut requested := st.scroll_positions[key] or { 0 }
+			if el.id.len > 0 {
+				if pending := st.pending_scroll[el.id] {
+					requested = pending
+					st.pending_scroll.delete(el.id)
+				}
+			}
+			position := C.ui2_win_set_scroll(hwnd, content_height, requested)
 			st.scroll_positions[key] = position
 			windows_render_children(hwnd, el.children, key, -position, mut active)
 		} else {

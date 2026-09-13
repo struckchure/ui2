@@ -461,6 +461,25 @@ $if (android || linux || ((macos || windows) && ui2_custom_rendering ?)) && !ui2
 		return g_scroll_offsets[id] or { 0.0 }
 	}
 
+	// scroll_to_offset puts a Scroll element at the given vertical offset. Before the
+	// element has been laid out its range is not known yet, so the offset is stored as
+	// asked and register_scroll_view clamps it to the real range on the next frame.
+	// That is what lets a screen open where it was last left.
+	pub fn scroll_to_offset(id string, offset f64) {
+		if id.len == 0 {
+			return
+		}
+		wanted := if offset < 0 { 0.0 } else { offset }
+		if id in g_scroll_viewports {
+			set_scroll_offset(id, wanted, scroll_maximum(id))
+			return
+		}
+		// The view does not exist yet, so its range is unknown and the offset cannot be
+		// stored as a live position: the next frame rendered without the view would
+		// prune it. Hold the request until the view registers and can clamp it.
+		g_pending_scroll[id] = wanted
+	}
+
 	pub fn scroll_to_rect(id string, _x f64, y f64, _width f64, height f64) {
 		area := g_scroll_viewports[id] or { return }
 		current := scroll_offset(id)
@@ -2603,6 +2622,19 @@ fn page_focused_text_area(direction int) {
 	// string ends in an ellipsis there; the immediate renderer draws straight
 	// into the window and would otherwise run the tail over its neighbours and
 	// off the window edge.
+	// Break text into the lines a multi-line label draws: on its own newlines, and on
+	// spaces wherever a line would outgrow the width. A word wider than the line is
+	// left whole and truncated when it is drawn, rather than split mid-word.
+	fn wrap_text_lines(ctx &gg.Context, t string, w f64, limit int, cfg gg.TextCfg) []string {
+		if limit <= 1 || w <= 0 {
+			return t.split('\n')
+		}
+		ctx.set_text_cfg(cfg)
+		return wrap_text_lines_measured(t, w, limit, fn [ctx] (line string) f64 {
+			return f64(ctx.text_width_f(line))
+		})
+	}
+
 	fn fit_text(ctx &gg.Context, t string, w f64, cfg gg.TextCfg) string {
 		if w <= 0 {
 			return t
@@ -2713,8 +2745,8 @@ fn page_focused_text_area(direction int) {
 			align: text_align(style.align)
 			vertical_align: .middle
 		}
-		if style.lines > 1 && t.contains('\n') {
-			parts := t.split('\n')
+		if style.lines > 1 {
+			parts := wrap_text_lines(ctx, t, w, style.lines, cfg)
 			line_h := font_line_height(style.size)
 			total_h := f64(parts.len) * line_h
 			start_y := y + (h - total_h) / 2 + line_h / 2

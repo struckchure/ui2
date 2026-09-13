@@ -56,6 +56,61 @@ fn font_line_height(points f64) f64 {
 	return font_em_pixels(points) * 1.25
 }
 
+// wrap_text_lines_measured breaks text into the lines a multi-line label draws: at
+// its own newlines, and at the space before whichever word would take a line past
+// `width`. A word too wide to fit alone is left whole, to be truncated when it is
+// drawn rather than split mid-word. `measure` reports the drawn width of a string.
+// At most `limit` lines come back, so a caller need not count them again.
+fn wrap_text_lines_measured(text string, width f64, limit int, measure fn (string) f64) []string {
+	if limit <= 1 || width <= 0 {
+		return text.split('\n')
+	}
+	paragraphs := text.split('\n')
+	mut lines := []string{}
+	for index, paragraph in paragraphs {
+		words := paragraph.split(' ')
+		mut current := ''
+		for word_index, word in words {
+			candidate := if current.len == 0 { word } else { current + ' ' + word }
+			if current.len == 0 || measure(candidate) <= width {
+				current = candidate
+				continue
+			}
+			if lines.len >= limit - 1 {
+				// The last line there is room for. Everything still to come stays on it
+				// so the draw truncates it, rather than text quietly disappearing.
+				lines << text_with_overflow(candidate, words[word_index + 1..], paragraphs[
+					index + 1..])
+				return lines
+			}
+			lines << current
+			current = word
+		}
+		if lines.len == limit - 1 && index + 1 < paragraphs.len {
+			// The budget ends on this line but the text does not: the paragraphs after
+			// it belong here too, for the same reason.
+			lines << text_with_overflow(current, []string{}, paragraphs[index + 1..])
+			return lines
+		}
+		lines << current
+		if lines.len >= limit {
+			return lines
+		}
+	}
+	return lines
+}
+
+// text_with_overflow puts everything a label has no room left for onto its last line:
+// the words after `head` on that line, then the paragraphs after it. They are joined
+// with spaces because what comes back is one line, and drawing truncates it, which is
+// how the text shows that it continues.
+fn text_with_overflow(head string, words []string, paragraphs []string) string {
+	mut parts := [head]
+	parts << words
+	parts << paragraphs
+	return parts.join(' ')
+}
+
 // ── Font files ─────────────────────────────────────────────────────
 
 fn font_u16(data []u8, offset int) int {
