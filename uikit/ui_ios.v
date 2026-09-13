@@ -920,6 +920,7 @@ fn render_root(declared Element) {
 	remember_scroll_offsets()
 	g_views = map[string]View{}
 	g_view_kinds = map[string]Kind{}
+	g_label_places = map[string]LabelPlacement{}
 	g_action_ids = map[u64]string{}
 	g_text_change_ids = map[u64]string{}
 	g_text_submit_ids = map[u64]string{}

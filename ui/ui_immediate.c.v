@@ -2732,8 +2732,6 @@ fn page_focused_text_area(direction int) {
 			.center { int(x + w / 2) }
 			.right { int(x + w) }
 		}
-
-		text_y := int(y + h / 2)
 		family := text_font_file(style.font_family, style.bold, style.italic)
 		ensure_family_fallbacks(ctx, family)
 		cfg := gg.TextCfg{
@@ -2756,9 +2754,6 @@ fn page_focused_text_area(direction int) {
 		// centre of each line because the config centres a line on its baseline box.
 		start_y := text_block_top(y, h, f64(parts.len) * line_h, style.valign) + line_h / 2
 		for i, part in parts {
-			if i >= style.lines {
-				break
-			}
 			line := if fit { fit_text(ctx, part, w, cfg) } else { part }
 			ctx.draw_text(int(text_x), int(start_y + f64(i) * line_h), line, cfg)
 		}

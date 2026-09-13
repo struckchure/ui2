@@ -625,6 +625,23 @@ typedef struct ui2_win_tooltip_binding {
 	wchar_t *text;
 } ui2_win_tooltip_binding;
 
+// Give a tooltip one more window to appear over. TTF_SUBCLASS has the tooltip watch
+// that window's own mouse messages, so a window the pointer can land on has to be a
+// target in its own right: a window with a child over it never sees the mouse there.
+static inline int ui2_win_tooltip_add_target(void *binding_ptr, void *target_ptr) {
+	ui2_win_tooltip_binding *binding = (ui2_win_tooltip_binding *)binding_ptr;
+	HWND target = (HWND)target_ptr;
+	if (binding == NULL || binding->tooltip == NULL || target == NULL) return 0;
+	TOOLINFOW tool;
+	ZeroMemory(&tool, sizeof(tool));
+	tool.cbSize = sizeof(tool);
+	tool.uFlags = TTF_IDISHWND | TTF_SUBCLASS;
+	tool.hwnd = GetAncestor(target, GA_ROOT);
+	tool.uId = (UINT_PTR)target;
+	tool.lpszText = binding->text;
+	return SendMessageW(binding->tooltip, TTM_ADDTOOLW, 0, (LPARAM)&tool) ? 1 : 0;
+}
+
 static inline void *ui2_win_create_tooltip(void *target_ptr, const wchar_t *text) {
 	HWND target = (HWND)target_ptr;
 	if (target == NULL || text == NULL || text[0] == 0) return NULL;
@@ -647,14 +664,7 @@ static inline void *ui2_win_create_tooltip(void *target_ptr, const wchar_t *text
 		HeapFree(GetProcessHeap(), 0, binding);
 		return NULL;
 	}
-	TOOLINFOW tool;
-	ZeroMemory(&tool, sizeof(tool));
-	tool.cbSize = sizeof(tool);
-	tool.uFlags = TTF_IDISHWND | TTF_SUBCLASS;
-	tool.hwnd = owner;
-	tool.uId = (UINT_PTR)target;
-	tool.lpszText = binding->text;
-	if (!SendMessageW(binding->tooltip, TTM_ADDTOOLW, 0, (LPARAM)&tool)) {
+	if (!ui2_win_tooltip_add_target(binding, target)) {
 		DestroyWindow(binding->tooltip);
 		HeapFree(GetProcessHeap(), 0, binding->text);
 		HeapFree(GetProcessHeap(), 0, binding);

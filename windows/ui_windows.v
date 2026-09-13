@@ -58,6 +58,8 @@ fn C.ui2_win_enable(hwnd voidptr, enabled int)
 
 fn C.ui2_win_create_tooltip(hwnd voidptr, text &u16) voidptr
 
+fn C.ui2_win_tooltip_add_target(tooltip voidptr, target voidptr) int
+
 fn C.ui2_win_destroy_tooltip(tooltip voidptr)
 
 fn C.ui2_win_focus(hwnd voidptr)
@@ -1087,8 +1089,9 @@ fn windows_update_element(key string, hwnd voidptr, el Element, y_offset int, cr
 	}
 	st.node_declared_text[key] = el.text
 	windows_update_style(key, text_hwnd, el)
-	// The tooltip goes on the outer window, which is the declared frame.
-	windows_update_tooltip(key, hwnd, el.tooltip)
+	// The tooltip goes on the outer window, which is the declared frame, and on the
+	// control inside it, which is what the pointer actually lands on.
+	windows_update_tooltip(key, hwnd, text_hwnd, el.tooltip)
 	if el.kind == .label {
 		C.ui2_win_invalidate_parent(hwnd)
 		C.ui2_win_invalidate(text_hwnd)
@@ -1096,7 +1099,7 @@ fn windows_update_element(key string, hwnd voidptr, el Element, y_offset int, cr
 	C.ui2_win_invalidate(hwnd)
 }
 
-fn windows_update_tooltip(key string, hwnd voidptr, tooltip string) {
+fn windows_update_tooltip(key string, hwnd voidptr, text_hwnd voidptr, tooltip string) {
 	mut st := windows_state()
 	if (st.tooltip_sigs[key] or { '' }) == tooltip {
 		return
@@ -1114,6 +1117,11 @@ fn windows_update_tooltip(key string, hwnd voidptr, tooltip string) {
 	native_tooltip := C.ui2_win_create_tooltip(hwnd, wide_tooltip)
 	unsafe { free(wide_tooltip) }
 	if native_tooltip != unsafe { nil } {
+		if text_hwnd != hwnd {
+			// A held label's static covers the text, so the mouse moves over it and
+			// never over the holder the tooltip was put on. It is a target too.
+			C.ui2_win_tooltip_add_target(native_tooltip, text_hwnd)
+		}
 		st.tooltips[key] = native_tooltip
 		st.tooltip_sigs[key] = tooltip
 	}
