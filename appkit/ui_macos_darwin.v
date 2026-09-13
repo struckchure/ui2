@@ -1786,9 +1786,36 @@ fn native_update_label(label_view NativeView, frame NativeRect, text string, tex
 		native_control_set_attributed_title(label_view, text, text_hex, size, bold, italic, underline)
 	}
 	macos.msg_void_i64(label_view, 'setAlignment:', i64(align))
-	cell := macos.msg_id(label_view, 'cell')
-	macos.msg_void_i64(cell, 'setLineBreakMode:', 4)
-	macos.msg_void_bool(cell, 'setUsesSingleLineMode:', lines == 1)
+	native_apply_line_limit(label_view, lines)
+	// Only NSTextField carries a line budget; an NSButton has none to set.
+	macos.msg_void_i64(label_view, 'setMaximumNumberOfLines:', i64(if lines > 1 {
+		lines
+	} else {
+		1
+	}))
+}
+
+// NSLineBreakMode values.
+const ns_line_break_by_word_wrapping = 0
+const ns_line_break_by_truncating_tail = 4
+
+// Give a control its line budget. One line means whatever does not fit is truncated,
+// which is what a button title and an ordinary label want. More than one line only
+// means anything if the text may flow onto them, so the break mode has to change with
+// it: left at truncate-tail, a multi-line label still laid its text out on one line
+// and clipped the rest, and asking for more lines did nothing.
+fn native_apply_line_limit(view NativeView, lines int) {
+	single := lines <= 1
+	cell := macos.msg_id(view, 'cell')
+	macos.msg_void_i64(cell, 'setLineBreakMode:', if single {
+		ns_line_break_by_truncating_tail
+	} else {
+		ns_line_break_by_word_wrapping
+	})
+	macos.msg_void_bool(cell, 'setUsesSingleLineMode:', single)
+	// Wrapped text that outgrows its budget ends in an ellipsis rather than being cut
+	// off mid-line.
+	macos.msg_void_bool(cell, 'setTruncatesLastVisibleLine:', !single)
 }
 
 fn native_new_button(frame NativeRect, title string, box BoxStyle, text_hex u32, size f64, bold bool, italic bool, underline bool, lines int, image_name string, native_style bool) NativeView {
@@ -1814,9 +1841,7 @@ fn native_update_button(button_view NativeView, frame NativeRect, title string, 
 		native_set_box_background(button_view, box)
 		native_set_corner_radius(button_view, box.radius)
 	}
-	cell := macos.msg_id(button_view, 'cell')
-	macos.msg_void_i64(cell, 'setLineBreakMode:', 4)
-	macos.msg_void_bool(cell, 'setUsesSingleLineMode:', lines == 1)
+	native_apply_line_limit(button_view, lines)
 	native_update_button_image(button_view, frame, image_name)
 	native_clear_control_state(button_view)
 }

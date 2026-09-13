@@ -56,6 +56,46 @@ fn font_line_height(points f64) f64 {
 	return font_em_pixels(points) * 1.25
 }
 
+// wrap_text_lines_measured breaks text into the lines a multi-line label draws: at
+// its own newlines, and at the space before whichever word would take a line past
+// `width`. A word too wide to fit alone is left whole, to be truncated when it is
+// drawn rather than split mid-word. `measure` reports the drawn width of a string.
+// At most `limit` lines come back, so a caller need not count them again.
+fn wrap_text_lines_measured(text string, width f64, limit int, measure fn (string) f64) []string {
+	if limit <= 1 || width <= 0 {
+		return text.split('\n')
+	}
+	mut lines := []string{}
+	for paragraph in text.split('\n') {
+		words := paragraph.split(' ')
+		mut current := ''
+		for index, word in words {
+			candidate := if current.len == 0 { word } else { current + ' ' + word }
+			if current.len == 0 || measure(candidate) <= width {
+				current = candidate
+				continue
+			}
+			if lines.len >= limit - 1 {
+				// This is the last line there is room for, so the words that did not
+				// fit stay on it to be truncated rather than quietly disappearing.
+				current = if index + 1 < words.len {
+					candidate + ' ' + words[index + 1..].join(' ')
+				} else {
+					candidate
+				}
+				break
+			}
+			lines << current
+			current = word
+		}
+		lines << current
+		if lines.len >= limit {
+			break
+		}
+	}
+	return if lines.len > limit { lines[..limit] } else { lines }
+}
+
 // ── Font files ─────────────────────────────────────────────────────
 
 fn font_u16(data []u8, offset int) int {

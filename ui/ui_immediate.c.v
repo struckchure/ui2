@@ -2603,6 +2603,19 @@ fn page_focused_text_area(direction int) {
 	// string ends in an ellipsis there; the immediate renderer draws straight
 	// into the window and would otherwise run the tail over its neighbours and
 	// off the window edge.
+	// Break text into the lines a multi-line label draws: on its own newlines, and on
+	// spaces wherever a line would outgrow the width. A word wider than the line is
+	// left whole and truncated when it is drawn, rather than split mid-word.
+	fn wrap_text_lines(ctx &gg.Context, t string, w f64, limit int, cfg gg.TextCfg) []string {
+		if limit <= 1 || w <= 0 {
+			return t.split('\n')
+		}
+		ctx.set_text_cfg(cfg)
+		return wrap_text_lines_measured(t, w, limit, fn [ctx] (line string) f64 {
+			return f64(ctx.text_width_f(line))
+		})
+	}
+
 	fn fit_text(ctx &gg.Context, t string, w f64, cfg gg.TextCfg) string {
 		if w <= 0 {
 			return t
@@ -2713,8 +2726,8 @@ fn page_focused_text_area(direction int) {
 			align: text_align(style.align)
 			vertical_align: .middle
 		}
-		if style.lines > 1 && t.contains('\n') {
-			parts := t.split('\n')
+		if style.lines > 1 {
+			parts := wrap_text_lines(ctx, t, w, style.lines, cfg)
 			line_h := font_line_height(style.size)
 			total_h := f64(parts.len) * line_h
 			start_y := y + (h - total_h) / 2 + line_h / 2

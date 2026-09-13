@@ -424,3 +424,44 @@ fn test_a_symbol_face_is_never_settled_on_for_text() {
 	assert regular == ''
 	assert bold == ''
 }
+
+// measure_by_length stands in for a real font: every character is one unit wide, so
+// a width is simply how many characters fit on a line.
+fn measure_by_length(line string) f64 {
+	return f64(line.runes().len)
+}
+
+fn test_wrap_text_lines_breaks_on_spaces_within_the_width() {
+	// "hello world" is 11 wide, so a 6 wide line takes one word at a time.
+	assert wrap_text_lines_measured('hello world', 6, 4, measure_by_length) == ['hello',
+		'world']
+	// Everything fits, so nothing is broken up.
+	assert wrap_text_lines_measured('hello world', 40, 4, measure_by_length) == ['hello world']
+	// A single line is left to the caller to truncate, whatever its width.
+	assert wrap_text_lines_measured('hello world', 6, 1, measure_by_length) == ['hello world']
+}
+
+fn test_wrap_text_lines_keeps_the_texts_own_line_breaks() {
+	assert wrap_text_lines_measured('one\ntwo', 40, 4, measure_by_length) == ['one', 'two']
+	assert wrap_text_lines_measured('alpha beta\ngamma', 6, 4, measure_by_length) == ['alpha',
+		'beta', 'gamma']
+}
+
+fn test_wrap_text_lines_leaves_the_overflow_on_its_last_line() {
+	// Two lines of room and four words: the second line keeps the words that did not
+	// fit, so drawing truncates them instead of dropping them without a mark.
+	assert wrap_text_lines_measured('aa bb cc dd', 5, 2, measure_by_length) == ['aa bb',
+		'cc dd']
+	assert wrap_text_lines_measured('aa bb cc dd ee', 5, 2, measure_by_length) == ['aa bb',
+		'cc dd ee']
+	// Never more lines than asked for.
+	assert wrap_text_lines_measured('a b c d e f', 1, 3, measure_by_length).len == 3
+}
+
+fn test_wrap_text_lines_keeps_a_word_wider_than_the_line_whole() {
+	// Splitting mid-word would read worse than letting the draw truncate it.
+	assert wrap_text_lines_measured('short verylongunbreakableword', 5, 3, measure_by_length) == [
+		'short',
+		'verylongunbreakableword',
+	]
+}
