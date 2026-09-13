@@ -79,6 +79,22 @@ $if !ui2_custom_rendering ? {
 		assert !windows_uses_transparent_button_paint(.checkbox, transparent)
 	}
 
+	fn test_windows_labels_never_paint_a_background_of_their_own() {
+		// The default box is opaque white, so a label carrying it must still be
+		// left alone: the view holding one paints what a label paints, and a label
+		// given a border or a tooltip cannot come out white on a coloured parent.
+		assert windows_draws_no_background(.label, BoxStyle{})
+		assert windows_draws_no_background(.checkbox, BoxStyle{})
+		assert windows_draws_no_background(.label, BoxStyle{
+			border_left: 1
+		})
+		assert !windows_draws_no_background(.view, BoxStyle{})
+		assert !windows_draws_no_background(.button, BoxStyle{})
+		assert windows_draws_no_background(.view, BoxStyle{
+			transparent: true
+		})
+	}
+
 	fn windows_test_font_family(font voidptr) string {
 		mut buffer := []u16{len: 32}
 		C.ui2_win_font_family(font, unsafe { &buffer[0] }, buffer.len)

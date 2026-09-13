@@ -332,6 +332,15 @@ fn windows_uses_transparent_button_paint(kind Kind, box BoxStyle) bool {
 	return box.transparent && kind in [.button, .toggle_button]
 }
 
+// Whether a window leaves the background behind it alone. A label paints none of its
+// own on Windows: what shows behind its text is whatever its parent put there, which
+// is what the control colour handler has always answered. The view holding a label
+// has to answer the same, or a label given a border, a tooltip or a menu — any of
+// which is enough to put it in one — would come out white on a parent that is not.
+fn windows_draws_no_background(kind Kind, box BoxStyle) bool {
+	return box.transparent || kind in [.label, .checkbox]
+}
+
 // A static control centres one line of text for itself and can do nothing about a
 // wrapped block, so a label is measured and given the rectangle its text really
 // needs. Every label is, not only one placed away from the top: a static draws as
@@ -1576,21 +1585,22 @@ fn ui2_windows_window_proc(hwnd voidptr, message u32, wparam usize, lparam isize
 			box := st.node_boxes[key] or { BoxStyle{} }
 			kind := st.node_kinds[key] or { Kind.view }
 			brush := st.brushes[key] or { voidptr(unsafe { nil }) }
-			return C.ui2_win_apply_control_colors(voidptr(wparam), style.color, box.bg, windows_bool(box.transparent || kind in [
-				.label,
-				.checkbox,
-			]), brush)
+			return C.ui2_win_apply_control_colors(voidptr(wparam), style.color, box.bg,
+				windows_bool(windows_draws_no_background(kind, box)), brush)
 		}
 		win_wm_paint_background {
-			box := if hwnd == st.root {
-				st.node_boxes[''] or { BoxStyle{} }
+			mut box := BoxStyle{}
+			mut kind := Kind.screen
+			if hwnd == st.root {
+				box = st.node_boxes[''] or { BoxStyle{} }
 			} else {
 				key := st.handle_keys[windows_handle_id(hwnd)] or { return 0 }
-				st.node_boxes[key] or { return 0 }
+				box = st.node_boxes[key] or { return 0 }
+				kind = st.node_kinds[key] or { Kind.screen }
 			}
 			C.ui2_win_paint_background_into(hwnd, voidptr(wparam), box.bg, box.radius,
-				windows_bool(box.transparent), box.border_color, box.border_left,
-				box.border_top, box.border_right, box.border_bottom)
+				windows_bool(windows_draws_no_background(kind, box)), box.border_color,
+				box.border_left, box.border_top, box.border_right, box.border_bottom)
 			return 0
 		}
 		win_wm_paint {
@@ -1607,7 +1617,8 @@ fn ui2_windows_window_proc(hwnd voidptr, message u32, wparam usize, lparam isize
 			kind := st.node_kinds[key] or { Kind.screen }
 			if kind == .view || kind == .scroll || windows_is_label_container(key, hwnd) {
 				box := st.node_boxes[key] or { BoxStyle{} }
-				C.ui2_win_paint_background(hwnd, box.bg, box.radius, windows_bool(box.transparent),
+				transparent := windows_bool(windows_draws_no_background(kind, box))
+				C.ui2_win_paint_background(hwnd, box.bg, box.radius, transparent,
 					box.border_color, box.border_left, box.border_top, box.border_right,
 					box.border_bottom)
 				return 0
