@@ -1848,6 +1848,7 @@ fn v_text_style(node &VNode) TextStyle {
 		vertical_align:     node.prop('vertical_align')
 		link:               node.prop('link')
 		align:              v_align(node.prop('align'))
+		valign:             v_valign(node.prop('valign'))
 		head_indent:        node.prop_or('head_indent', '0').f64()
 		first_line_indent:  node.prop_or('first_line_indent', '0').f64()
 		hyphenation_factor: node.prop_or('hyphenation_factor', '0').f64()
@@ -1868,5 +1869,16 @@ fn v_align(raw string) Align {
 		'center' { Align.center }
 		'right' { Align.right }
 		else { Align.left }
+	}
+}
+
+// An unset valign keeps TextStyle's own default rather than forcing a value, so a
+// declaration that says nothing about it reads the same as V-built label.
+fn v_valign(raw string) VAlign {
+	return match raw {
+		'top' { VAlign.top }
+		'bottom' { VAlign.bottom }
+		'middle', 'center' { VAlign.middle }
+		else { TextStyle{}.valign }
 	}
 }

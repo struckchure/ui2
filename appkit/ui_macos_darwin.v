@@ -1841,7 +1841,7 @@ fn native_apply_label_valign(label_view NativeView, frame NativeRect, lines int,
 	if valign == .top || frame.height <= 0 {
 		return
 	}
-	content := native_label_content_height(label_view, lines)
+	content := native_label_content_height(label_view, frame, lines)
 	if content <= 0 || content >= frame.height {
 		return
 	}
@@ -1854,18 +1854,19 @@ fn native_apply_label_valign(label_view NativeView, frame NativeRect, lines int,
 	})
 }
 
-// How tall the field's text is. One line is the font's own line height, which its
-// metrics give directly — no layout pass, so a grid of labels does not pay for a
-// measurement it could work out.
+// How tall the field's text is.
 //
-// Wrapped text is a different question — how tall it is depends on where the lines
-// broke — and answering it needs the text measured against a width. This backend has
-// no way to do that: sizing a cell to fit measures it unbounded, so it reports one
-// line, and the macos bindings expose no message returning an NSSize. A wrapping
-// label is left at the top until they do, which is where it was drawn before valign.
-fn native_label_content_height(label_view NativeView, lines int) f64 {
+// Wrapped text is only as tall as the lines it broke into, which depends on the width
+// it had to break against. Telling the field that width makes its intrinsic size the
+// size the text really wants, so that is what a wrapping label is measured by.
+//
+// One line needs no measuring at all: it is the font's own line height, which the
+// font's metrics give directly, so a grid of labels pays no layout pass for it.
+fn native_label_content_height(label_view NativeView, frame NativeRect, lines int) f64 {
 	if lines > 1 {
-		return 0
+		macos.msg_void_f64(label_view, 'setPreferredMaxLayoutWidth:', frame.width)
+		// Point carries a Cocoa size as well as a point; y is the height.
+		return macos.msg_point(label_view, 'intrinsicContentSize').y
 	}
 	font := macos.msg_id(label_view, 'font')
 	if native_is_nil(font) {

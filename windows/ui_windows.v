@@ -871,7 +871,9 @@ fn windows_widget_kind(kind Kind) int {
 }
 
 fn windows_structural_signature(el Element) string {
-	return '${int(el.kind)}:${windows_bool(el.secure)}:${windows_align(el.text_style.align)}:${windows_bool(el.disable_scroll)}:${windows_bool(el.native_style)}:${int(el.orientation)}'
+	// valign belongs here because it is baked into the control's window style when the
+	// control is created; a retained control cannot be told about a new one.
+	return '${int(el.kind)}:${windows_bool(el.secure)}:${windows_align(el.text_style.align)}:${windows_valign(el.text_style.valign)}:${windows_bool(el.disable_scroll)}:${windows_bool(el.native_style)}:${int(el.orientation)}'
 }
 
 fn windows_content_height(children []Element) int {

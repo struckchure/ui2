@@ -500,20 +500,55 @@ fn new_scroll_view(frame Rect, box BoxStyle) View {
 	return scroll
 }
 
-fn new_label_view(frame Rect, t string, text_hex u32, size f64, bold bool, align int, lines int) View {
+fn new_label_view(frame Rect, t string, text_hex u32, size f64, bold bool, align int, lines int, valign VAlign) View {
 	lbl := macos.msg_id_rect(macos.alloc('UILabel'), 'initWithFrame:', native_rect(frame))
-	update_label_view(lbl, frame, t, text_hex, size, bold, align, lines)
+	update_label_view(lbl, frame, t, text_hex, size, bold, align, lines, valign)
 	return lbl
 }
 
-fn update_label_view(lbl View, frame Rect, t string, text_hex u32, size f64, bold bool, align int, lines int) {
+fn update_label_view(lbl View, frame Rect, t string, text_hex u32, size f64, bold bool, align int, lines int, valign VAlign) {
 	macos.msg_void_rect(lbl, 'setFrame:', native_rect(frame))
 	macos.msg_void1(lbl, 'setText:', macos.nsstring(t))
 	macos.msg_void1(lbl, 'setTextColor:', ios.color(text_hex))
 	macos.msg_void1(lbl, 'setFont:', font(size, bold))
 	macos.msg_void_i64(lbl, 'setTextAlignment:', i64(align))
 	macos.msg_void_i64(lbl, 'setNumberOfLines:', i64(lines))
-	macos.msg_void_i64(lbl, 'setLineBreakMode:', 4)
+	// A label allowed more than one line has to be allowed to wrap onto them; left
+	// truncating, asking for more lines only clips one line instead of filling them.
+	macos.msg_void_i64(lbl, 'setLineBreakMode:', if lines == 1 {
+		ns_line_break_by_truncating_tail
+	} else {
+		ns_line_break_by_word_wrapping
+	})
+	apply_label_valign(lbl, frame, lines, valign)
+}
+
+// NSLineBreakMode values, shared with UILabel.
+const ns_line_break_by_word_wrapping = 0
+const ns_line_break_by_truncating_tail = 4
+
+// A UILabel centres its text in its frame, so middle is already what it does. Top and
+// bottom shrink the label to the height its text actually wants and put that where it
+// was asked for; a wrapping label is measured against the width it has to break on.
+fn apply_label_valign(lbl View, frame Rect, lines int, valign VAlign) {
+	if valign == .middle || frame.height <= 0 {
+		return
+	}
+	if lines > 1 {
+		macos.msg_void_f64(lbl, 'setPreferredMaxLayoutWidth:', frame.width)
+	}
+	// Point carries a Cocoa size as well as a point; y is the height.
+	content := macos.msg_point(lbl, 'intrinsicContentSize').y
+	if content <= 0 || content >= frame.height {
+		return
+	}
+	offset := if valign == .top { 0.0 } else { frame.height - content }
+	macos.msg_void_rect(lbl, 'setFrame:', native_rect(Rect{
+		x:      frame.x
+		y:      frame.y + offset
+		width:  frame.width
+		height: content
+	}))
 }
 
 fn new_image_view(frame Rect, path string, rotation f64) View {
@@ -876,7 +911,7 @@ fn native_create_element(el Element) View {
 		.view { new_native_view(el.frame, el.box) }
 		.scroll { new_scroll_view(el.frame, el.box) }
 		.label {
-			new_label_view(el.frame, el.text, el.text_style.color, el.text_style.size, el.text_style.bold, align_value(el.text_style.align), el.text_style.lines)
+			new_label_view(el.frame, el.text, el.text_style.color, el.text_style.size, el.text_style.bold, align_value(el.text_style.align), el.text_style.lines, el.text_style.valign)
 		}
 		.image { new_image_view(el.frame, el.image_path, el.rotation) }
 		.button {
@@ -910,7 +945,7 @@ fn native_update_element(native View, el Element, declared_text_changed bool) {
 			set_corner_radius(native, el.box.radius)
 		}
 		.label {
-			update_label_view(native, el.frame, el.text, el.text_style.color, el.text_style.size, el.text_style.bold, align_value(el.text_style.align), el.text_style.lines)
+			update_label_view(native, el.frame, el.text, el.text_style.color, el.text_style.size, el.text_style.bold, align_value(el.text_style.align), el.text_style.lines, el.text_style.valign)
 		}
 		.image { update_image_view(native, el.frame, el.image_path, el.rotation) }
 		.button {
