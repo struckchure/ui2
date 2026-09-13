@@ -135,6 +135,22 @@ fn box_draws_fill(box BoxStyle) bool {
 	return !box.transparent
 }
 
+fn box_draws_border(box BoxStyle) bool {
+	return box.border_left > 0 || box.border_top > 0 || box.border_right > 0
+		|| box.border_bottom > 0
+}
+
+// Placing a label's text means sizing the control it draws with to the text, and that
+// control is then the wrong thing for anything measured against the label's declared
+// frame: a tooltip, a context menu, a border drawn round its edge. Such a label is put
+// inside a view covering the frame, which is what the backend holds and decorates,
+// while the text moves within it. A label with none of those stays the control itself,
+// because a view per label costs a third of a frame in a grid of them.
+fn label_needs_container(el Element) bool {
+	return el.kind == .label && (el.tooltip.len > 0 || el.menu.len > 0
+		|| box_draws_border(el.box))
+}
+
 // box_border_width keeps a declared border inside its element. Border widths
 // are logical units, just like Rect and corner radii; each backend is
 // responsible for mapping those units to its native device scale.

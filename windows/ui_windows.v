@@ -338,7 +338,7 @@ fn windows_place_label(key string, hwnd voidptr, el Element, y_offset int) {
 	if el.text_style.valign == .top || el.frame.height <= 0 || el.text.len == 0 {
 		return
 	}
-	boxed := windows_label_needs_container(el)
+	boxed := label_needs_container(el)
 	text_hwnd := C.ui2_win_label_text_hwnd(hwnd)
 	content := f64(C.ui2_win_label_content_height(text_hwnd, int(el.frame.width), el.text_style.lines))
 	if content <= 0 || content >= el.frame.height {
@@ -522,12 +522,20 @@ pub fn set_window_title(title string) {
 pub fn text(id string) string {
 	st := windows_state()
 	hwnd := st.views[id] or { return '' }
+	if (st.view_kinds[id] or { Kind.view }) == .label {
+		// A label is its static control, or the view holding one.
+		return windows_native_text(C.ui2_win_label_text_hwnd(hwnd))
+	}
 	return windows_native_text(hwnd)
 }
 
 pub fn set_text(id string, value string) {
 	mut st := windows_state()
-	hwnd := st.views[id] or { return }
+	outer := st.views[id] or { return }
+	mut hwnd := outer
+	if (st.view_kinds[id] or { Kind.view }) == .label {
+		hwnd = C.ui2_win_label_text_hwnd(outer)
+	}
 	was_rendering := st.rendering
 	st.rendering = true
 	if (st.view_kinds[id] or { Kind.view }) == .dropdown {
@@ -835,6 +843,14 @@ fn windows_render_element(parent voidptr, el Element, key string, parent_key str
 	st.node_text_styles[key] = visual_text_style
 	st.node_ids[key] = el.id
 	st.handle_keys[windows_handle_id(hwnd)] = key
+	if el.kind == .label {
+		// A held label's static sends its own WM_CTLCOLORSTATIC, so it has to lead
+		// back to the same node or the label loses its colours to the default handler.
+		text_hwnd := C.ui2_win_label_text_hwnd(hwnd)
+		if text_hwnd != hwnd {
+			st.handle_keys[windows_handle_id(text_hwnd)] = key
+		}
+	}
 	if el.id.len > 0 {
 		st.views[el.id] = hwnd
 		st.view_keys[el.id] = key
@@ -874,18 +890,9 @@ fn windows_render_element(parent voidptr, el Element, key string, parent_key str
 	return hwnd
 }
 
-// Placing a label's text means sizing its static control to the text, and that
-// control is what a tooltip, a context menu and a click binding are keyed to. A label
-// with any of those is put inside a container covering the declared frame, and the
-// container is what the rest of the backend holds, so they answer over all of it. A
-// label with none stays a bare control, which is the overwhelming majority of them.
-fn windows_label_needs_container(el Element) bool {
-	return el.kind == .label && (el.tooltip.len > 0 || el.menu.len > 0)
-}
-
 fn windows_create_element(parent voidptr, el Element, y_offset int) voidptr {
 	wide := el.text.to_wide()
-	boxed := windows_label_needs_container(el)
+	boxed := label_needs_container(el)
 	mut host := parent
 	mut x := int(el.frame.x)
 	mut y := int(el.frame.y) + y_offset
@@ -933,7 +940,7 @@ fn windows_widget_kind(kind Kind) int {
 }
 
 fn windows_structural_signature(el Element) string {
-	return '${int(el.kind)}:${windows_bool(el.secure)}:${windows_align(el.text_style.align)}:${windows_bool(windows_label_needs_container(el))}:${windows_bool(el.disable_scroll)}:${windows_bool(el.native_style)}:${int(el.orientation)}'
+	return '${int(el.kind)}:${windows_bool(el.secure)}:${windows_align(el.text_style.align)}:${windows_bool(label_needs_container(el))}:${windows_bool(el.disable_scroll)}:${windows_bool(el.native_style)}:${int(el.orientation)}'
 }
 
 fn windows_content_height(children []Element) int {

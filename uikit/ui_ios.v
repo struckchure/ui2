@@ -130,6 +130,8 @@ pub fn text(id string) string {
 	kind := g_view_kinds[id] or { Kind.view }
 	ns_text := if kind == .dropdown {
 		macos.msg_id(view, 'currentTitle')
+	} else if kind == .label {
+		macos.msg_id(label_text_view(view), 'text')
 	} else {
 		macos.msg_id(view, 'text')
 	}
@@ -142,6 +144,8 @@ pub fn set_text(id string, t string) {
 		kind := g_view_kinds[id] or { Kind.view }
 		if kind == .dropdown {
 			macos.msg_void2(view, 'setTitle:forState:', macos.nsstring(t), macos.Id(usize(0)))
+		} else if kind == .label {
+			macos.msg_void1(label_text_view(view), 'setText:', macos.nsstring(t))
 		} else {
 			macos.msg_void1(view, 'setText:', macos.nsstring(t))
 		}
@@ -500,14 +504,46 @@ fn new_scroll_view(frame Rect, box BoxStyle) View {
 	return scroll
 }
 
-fn new_label_view(frame Rect, t string, text_hex u32, size f64, bold bool, align int, lines int, valign VAlign) View {
-	lbl := macos.msg_id_rect(macos.alloc('UILabel'), 'initWithFrame:', native_rect(frame))
-	update_label_view(lbl, frame, t, text_hex, size, bold, align, lines, valign)
-	return lbl
+fn new_label_view(frame Rect, t string, text_hex u32, size f64, bold bool, align int, lines int, valign VAlign, boxed bool) View {
+	inner := if boxed {
+		Rect{
+			width:  frame.width
+			height: frame.height
+		}
+	} else {
+		frame
+	}
+	lbl := macos.msg_id_rect(macos.alloc('UILabel'), 'initWithFrame:', native_rect(inner))
+	if !boxed {
+		update_label_view(lbl, frame, t, text_hex, size, bold, align, lines, valign, boxed)
+		return lbl
+	}
+	container := macos.msg_id_rect(macos.alloc('UIView'), 'initWithFrame:', native_rect(frame))
+	macos.msg_void1(container, 'addSubview:', lbl)
+	macos.release(lbl)
+	update_label_view(container, frame, t, text_hex, size, bold, align, lines, valign,
+		boxed)
+	return container
 }
 
-fn update_label_view(lbl View, frame Rect, t string, text_hex u32, size f64, bold bool, align int, lines int, valign VAlign) {
-	macos.msg_void_rect(lbl, 'setFrame:', native_rect(frame))
+// The label a view draws its text with: itself, or the one it holds.
+fn label_text_view(view View) View {
+	subviews := macos.msg_id(view, 'subviews')
+	if subviews == macos.Id(unsafe { nil }) || macos.msg_u64(subviews, 'count') == 0 {
+		return view
+	}
+	return View(macos.msg_id_u64(subviews, 'objectAtIndex:', 0))
+}
+
+fn update_label_view(view View, frame Rect, t string, text_hex u32, size f64, bold bool, align int, lines int, valign VAlign, boxed bool) {
+	macos.msg_void_rect(view, 'setFrame:', native_rect(frame))
+	lbl := if boxed { label_text_view(view) } else { view }
+	if boxed {
+		macos.msg_void_rect(lbl, 'setFrame:', native_rect(Rect{
+			width:  frame.width
+			height: frame.height
+		}))
+	}
 	macos.msg_void1(lbl, 'setText:', macos.nsstring(t))
 	macos.msg_void1(lbl, 'setTextColor:', ios.color(text_hex))
 	macos.msg_void1(lbl, 'setFont:', font(size, bold))
@@ -520,7 +556,7 @@ fn update_label_view(lbl View, frame Rect, t string, text_hex u32, size f64, bol
 	} else {
 		ns_line_break_by_word_wrapping
 	})
-	apply_label_valign(lbl, frame, lines, valign)
+	apply_label_valign(lbl, frame, lines, valign, boxed)
 }
 
 // NSLineBreakMode values, shared with UILabel.
@@ -530,7 +566,7 @@ const ns_line_break_by_truncating_tail = 4
 // A UILabel centres its text in its frame, so middle is already what it does. Top and
 // bottom shrink the label to the height its text actually wants and put that where it
 // was asked for; a wrapping label is measured against the width it has to break on.
-fn apply_label_valign(lbl View, frame Rect, lines int, valign VAlign) {
+fn apply_label_valign(lbl View, frame Rect, lines int, valign VAlign, boxed bool) {
 	if valign == .middle || frame.height <= 0 {
 		return
 	}
@@ -543,11 +579,21 @@ fn apply_label_valign(lbl View, frame Rect, lines int, valign VAlign) {
 		return
 	}
 	offset := if valign == .top { 0.0 } else { frame.height - content }
-	macos.msg_void_rect(lbl, 'setFrame:', native_rect(Rect{
-		x:      frame.x
-		y:      frame.y + offset
-		width:  frame.width
-		height: content
+	// Inside the holding view when there is one, so that view keeps the declared frame
+	// and the border drawn round it stays round the label rather than round the text.
+	macos.msg_void_rect(lbl, 'setFrame:', native_rect(if boxed {
+		Rect{
+			y:      offset
+			width:  frame.width
+			height: content
+		}
+	} else {
+		Rect{
+			x:      frame.x
+			y:      frame.y + offset
+			width:  frame.width
+			height: content
+		}
 	}))
 }
 
@@ -911,7 +957,7 @@ fn native_create_element(el Element) View {
 		.view { new_native_view(el.frame, el.box) }
 		.scroll { new_scroll_view(el.frame, el.box) }
 		.label {
-			new_label_view(el.frame, el.text, el.text_style.color, el.text_style.size, el.text_style.bold, align_value(el.text_style.align), el.text_style.lines, el.text_style.valign)
+			new_label_view(el.frame, el.text, el.text_style.color, el.text_style.size, el.text_style.bold, align_value(el.text_style.align), el.text_style.lines, el.text_style.valign, label_needs_container(el))
 		}
 		.image { new_image_view(el.frame, el.image_path, el.rotation) }
 		.button {
@@ -945,7 +991,7 @@ fn native_update_element(native View, el Element, declared_text_changed bool) {
 			set_corner_radius(native, el.box.radius)
 		}
 		.label {
-			update_label_view(native, el.frame, el.text, el.text_style.color, el.text_style.size, el.text_style.bold, align_value(el.text_style.align), el.text_style.lines, el.text_style.valign)
+			update_label_view(native, el.frame, el.text, el.text_style.color, el.text_style.size, el.text_style.bold, align_value(el.text_style.align), el.text_style.lines, el.text_style.valign, label_needs_container(el))
 		}
 		.image { update_image_view(native, el.frame, el.image_path, el.rotation) }
 		.button {

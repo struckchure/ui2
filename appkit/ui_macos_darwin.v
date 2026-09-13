@@ -1819,15 +1819,6 @@ fn native_update_image(image_view NativeView, frame NativeRect, path string, rot
 	}
 }
 
-// Placing a label's text means making its field only as tall as the text, which also
-// makes the field the only thing a tooltip or a context menu can be hit in. A label
-// with either of those gets a view of the declared frame to hold the field, so they
-// go on answering over all of it; a label with neither is the field itself, because
-// wrapping every label in a second view costs a third of a frame in a grid of them.
-fn label_needs_container(el Element) bool {
-	return el.kind == .label && (el.tooltip.len > 0 || el.menu.len > 0)
-}
-
 fn native_new_label(frame NativeRect, text string, text_hex u32, size f64, bold bool, italic bool, underline bool, align int, lines int, valign VAlign, boxed bool) NativeView {
 	inner := if boxed {
 		NativeRect{
