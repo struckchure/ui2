@@ -378,6 +378,8 @@ static inline int ui2_win_label_content_height(void *hwnd_ptr, int width, int li
 	HFONT previous = NULL;
 	if (font != NULL) previous = (HFONT)SelectObject(hdc, font);
 	int height = 0;
+	TEXTMETRICW metrics;
+	int line_height = GetTextMetricsW(hdc, &metrics) ? (int)metrics.tmHeight : 0;
 	if (lines > 1) {
 		int length = GetWindowTextLengthW(hwnd);
 		wchar_t *text = length > 0
@@ -393,10 +395,13 @@ static inline int ui2_win_label_content_height(void *hwnd_ptr, int width, int li
 			DrawTextW(hdc, text, length, &rc, DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX);
 			height = (int)(rc.bottom - rc.top);
 			free(text);
+			// A static control shows as many lines as its rectangle holds, so text that
+			// wraps past the caller's budget must not stretch the rectangle to fit: the
+			// block is only ever as tall as the lines that were asked for.
+			if (line_height > 0 && height > line_height * lines) height = line_height * lines;
 		}
 	} else {
-		TEXTMETRICW metrics;
-		if (GetTextMetricsW(hdc, &metrics)) height = (int)metrics.tmHeight;
+		height = line_height;
 	}
 	if (previous != NULL) SelectObject(hdc, previous);
 	ReleaseDC(hwnd, hdc);

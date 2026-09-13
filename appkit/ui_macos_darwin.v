@@ -77,6 +77,7 @@ mut:
 	node_kinds          map[string]Kind
 	node_text_direct    map[string]bool
 	node_interactive    map[string]bool
+	node_label_boxed    map[string]bool
 	node_secure         map[string]bool
 	node_declared_text  map[string]string
 	node_content_sig    map[string]string
@@ -114,6 +115,7 @@ const runtime_state_singleton = &RuntimeState{
 	node_kinds: map[string]Kind{}
 	node_text_direct: map[string]bool{}
 	node_interactive: map[string]bool{}
+	node_label_boxed: map[string]bool{}
 	node_secure: map[string]bool{}
 	node_declared_text: map[string]string{}
 	node_content_sig: map[string]string{}
@@ -359,6 +361,10 @@ pub fn text(id string) string {
 	}
 	if kind == .dropdown {
 		return native_dropdown_text(native)
+	}
+	if kind == .label {
+		// A label is its text field, or the view holding one.
+		return native_text(label_text_field(native))
 	}
 	return native_text(native)
 }
@@ -912,13 +918,15 @@ fn render_element(parent NativeView, el Element, key string, mut active map[stri
 		&& existing_direct != el.disable_scroll
 	interactive_changed := (el.kind == .view || el.kind == .image) && existing_kind == el.kind
 		&& existing_interactive != interactive
+	label_boxed_changed := el.kind == .label && existing_kind == .label
+		&& (st.node_label_boxed[key] or { false }) != label_needs_container(el)
 	secure_changed := el.kind == .text_field && existing_kind == .text_field
 		&& existing_secure != el.secure
 	declared_text_changed := key !in st.node_declared_text || (st.node_declared_text[key] or { '' }) != el.text
 	content_sig := text_area_content_signature(el)
 	content_changed := key !in st.node_content_sig || (st.node_content_sig[key] or { '' }) != content_sig
 	if native_is_nil(native) || existing_kind != el.kind || text_area_mode_changed
-		|| interactive_changed || secure_changed {
+		|| interactive_changed || secure_changed || label_boxed_changed {
 		old_native := native
 		mut create_el := el
 		mut restore_editing := false
@@ -966,6 +974,7 @@ fn render_element(parent NativeView, el Element, key string, mut active map[stri
 		st.nodes[key] = native
 		st.node_kinds[key] = el.kind
 		st.node_interactive[key] = interactive
+		st.node_label_boxed[key] = label_needs_container(el)
 		st.node_secure[key] = el.secure
 		if el.kind == .text_area {
 			st.node_text_direct[key] = el.disable_scroll
@@ -1205,7 +1214,7 @@ fn native_create_element(el Element) NativeView {
 			native_new_scroll(element_rect(el.frame), el.box, el.persistent_scrollbars)
 		}
 		.label {
-			native_new_label(element_rect(el.frame), el.text, el.text_style.color, el.text_style.size, el.text_style.bold, el.text_style.italic, el.text_style.underline, align_value(el.text_style.align), el.text_style.lines, el.text_style.valign)
+			native_new_label(element_rect(el.frame), el.text, el.text_style.color, el.text_style.size, el.text_style.bold, el.text_style.italic, el.text_style.underline, align_value(el.text_style.align), el.text_style.lines, el.text_style.valign, label_needs_container(el))
 		}
 		.image {
 			native_new_image(element_rect(el.frame), el.image_path, el.rotation)
@@ -1251,7 +1260,7 @@ fn native_update_element(native NativeView, el Element, declared_text_changed bo
 			native_set_scrollbar_mode(native, el.persistent_scrollbars)
 		}
 		.label {
-			native_update_label(native, element_rect(el.frame), el.text, el.text_style.color, el.text_style.size, el.text_style.bold, el.text_style.italic, el.text_style.underline, align_value(el.text_style.align), el.text_style.lines, el.text_style.valign)
+			native_update_label(native, element_rect(el.frame), el.text, el.text_style.color, el.text_style.size, el.text_style.bold, el.text_style.italic, el.text_style.underline, align_value(el.text_style.align), el.text_style.lines, el.text_style.valign, label_needs_container(el))
 		}
 		.image {
 			native_update_image(native, element_rect(el.frame), el.image_path, el.rotation)
@@ -1802,15 +1811,56 @@ fn native_update_image(image_view NativeView, frame NativeRect, path string, rot
 	}
 }
 
-fn native_new_label(frame NativeRect, text string, text_hex u32, size f64, bold bool, italic bool, underline bool, align int, lines int, valign VAlign) NativeView {
-	label_view := macos.msg_id_rect(macos.alloc('NSTextField'), 'initWithFrame:', appkit_rect(frame))
-	native_update_label(label_view, frame, text, text_hex, size, bold, italic, underline,
-		align, lines, valign)
-	return label_view
+// Placing a label's text means making its field only as tall as the text, which also
+// makes the field the only thing a tooltip or a context menu can be hit in. A label
+// with either of those gets a view of the declared frame to hold the field, so they
+// go on answering over all of it; a label with neither is the field itself, because
+// wrapping every label in a second view costs a third of a frame in a grid of them.
+fn label_needs_container(el Element) bool {
+	return el.kind == .label && (el.tooltip.len > 0 || el.menu.len > 0)
 }
 
-fn native_update_label(label_view NativeView, frame NativeRect, text string, text_hex u32, size f64, bold bool, italic bool, underline bool, align int, lines int, valign VAlign) {
-	native_set_frame(label_view, frame)
+fn native_new_label(frame NativeRect, text string, text_hex u32, size f64, bold bool, italic bool, underline bool, align int, lines int, valign VAlign, boxed bool) NativeView {
+	inner := if boxed {
+		NativeRect{
+			width:  frame.width
+			height: frame.height
+		}
+	} else {
+		frame
+	}
+	field := macos.msg_id_rect(macos.alloc('NSTextField'), 'initWithFrame:', appkit_rect(inner))
+	if !boxed {
+		native_update_label(field, frame, text, text_hex, size, bold, italic, underline,
+			align, lines, valign, boxed)
+		return field
+	}
+	container := macos.msg_id_rect(macos.alloc('UI2FlippedView'), 'initWithFrame:', appkit_rect(frame))
+	native_add_subview(container, field)
+	macos.release(field)
+	native_update_label(container, frame, text, text_hex, size, bold, italic, underline,
+		align, lines, valign, boxed)
+	return container
+}
+
+// The text field a label draws with: the view itself, or the one it holds.
+fn label_text_field(view NativeView) NativeView {
+	subviews := macos.msg_id(view, 'subviews')
+	if native_is_nil(subviews) || macos.msg_u64(subviews, 'count') == 0 {
+		return view
+	}
+	return NativeView(macos.msg_id_u64(subviews, 'objectAtIndex:', 0))
+}
+
+fn native_update_label(view NativeView, frame NativeRect, text string, text_hex u32, size f64, bold bool, italic bool, underline bool, align int, lines int, valign VAlign, boxed bool) {
+	native_set_frame(view, frame)
+	label_view := if boxed { label_text_field(view) } else { view }
+	if boxed {
+		native_set_frame(label_view, NativeRect{
+			width:  frame.width
+			height: frame.height
+		})
+	}
 	macos.msg_void1(label_view, 'setStringValue:', macos.nsstring(text))
 	macos.msg_void_bool(label_view, 'setEditable:', false)
 	macos.msg_void_bool(label_view, 'setSelectable:', false)
@@ -1830,14 +1880,17 @@ fn native_update_label(label_view NativeView, frame NativeRect, text string, tex
 	} else {
 		1
 	}))
-	native_apply_label_valign(label_view, frame, lines, valign)
+	native_apply_label_valign(label_view, frame, lines, valign, boxed)
 }
 
 // A text field draws its content from the top of its frame however tall that frame
 // is, so a label given a box taller than its text needs the text block moved to sit
-// in the middle or at the bottom. The field is shrunk to the block rather than the
-// text being offset inside it, which keeps the horizontal alignment intact.
-fn native_apply_label_valign(label_view NativeView, frame NativeRect, lines int, valign VAlign) {
+// in the middle or at the bottom.
+//
+// The drawing is moved, not the field. The field keeps the frame it was given, so the
+// tooltip, the context menu and any pointer attached to the label still answer over
+// the whole area the caller laid out, not just the strip the text ended up on.
+fn native_apply_label_valign(label_view NativeView, frame NativeRect, lines int, valign VAlign, boxed bool) {
 	if valign == .top || frame.height <= 0 {
 		return
 	}
@@ -1846,11 +1899,20 @@ fn native_apply_label_valign(label_view NativeView, frame NativeRect, lines int,
 		return
 	}
 	offset := if valign == .middle { (frame.height - content) / 2 } else { frame.height - content }
-	native_set_frame(label_view, NativeRect{
-		x:      frame.x
-		y:      frame.y + offset
-		width:  frame.width
-		height: content
+	// Inside the holding view when there is one, so that view keeps the declared frame.
+	native_set_frame(label_view, if boxed {
+		NativeRect{
+			y:      offset
+			width:  frame.width
+			height: content
+		}
+	} else {
+		NativeRect{
+			x:      frame.x
+			y:      frame.y + offset
+			width:  frame.width
+			height: content
+		}
 	})
 }
 

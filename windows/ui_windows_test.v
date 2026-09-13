@@ -198,7 +198,22 @@ $if !ui2_custom_rendering ? {
 		label := C.ui2_win_create_widget(windows_widget_kind(.label), root, 0, 40, 200, 32, empty, 0, 0, 0, 0, 0)
 		checkbox := C.ui2_win_create_widget(windows_widget_kind(.checkbox), root, 0, 80, 210, 30, empty, 0, 0, 0, 0, 0)
 		switch_view := C.ui2_win_create_widget(windows_widget_kind(.switch_control), root, 0, 120, 60, 32, empty, 0, 0, 0, 0, 0)
-		assert C.ui2_win_widget_style(label) & usize(0x0200) != 0
+		// A label is placed by measuring it now, so it no longer asks the control to
+		// centre a line on its behalf: SS_CENTERIMAGE is gone and SS_NOTIFY remains.
+		assert C.ui2_win_widget_style(label) & usize(0x0200) == 0
+		assert C.ui2_win_widget_style(label) & usize(0x0100) != 0
+		measured_text := 'measured label'.to_wide()
+		measured := C.ui2_win_create_widget(windows_widget_kind(.label), root, 0, 160,
+			200, 32, measured_text, 0, 0, 0, 0, 0)
+		unsafe {
+			free(measured_text)
+		}
+		// One line is the font's own height; a budget of several lines wraps and is
+		// capped to that budget rather than growing with the text.
+		single := C.ui2_win_label_content_height(measured, 200, 1)
+		assert single > 0
+		assert C.ui2_win_label_content_height(measured, 40, 3) <= single * 3
+		assert C.ui2_win_label_content_height(measured, 40, 3) >= single
 		assert C.ui2_win_widget_style(checkbox) & usize(0x2000) == 0
 		assert C.ui2_win_widget_style(switch_view) & usize(0x1000) != 0
 		C.ui2_win_set_checked(switch_view, 1)
