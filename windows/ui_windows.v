@@ -24,7 +24,7 @@ fn C.ui2_win_apply_min_size(hwnd voidptr, lparam isize, width int, height int)
 
 fn C.ui2_win_set_window_title(hwnd voidptr, title &u16)
 
-fn C.ui2_win_create_widget(kind int, parent voidptr, x int, y int, width int, height int, text &u16, alignment int, secure int, readonly int, disable_scroll int, vertical int) voidptr
+fn C.ui2_win_create_widget(kind int, parent voidptr, x int, y int, width int, height int, text &u16, alignment int, valign int, secure int, readonly int, disable_scroll int, vertical int) voidptr
 
 fn C.ui2_win_show_main_window(hwnd voidptr)
 
@@ -323,6 +323,15 @@ fn windows_bool(value bool) int {
 
 fn windows_uses_transparent_button_paint(kind Kind, box BoxStyle) bool {
 	return box.transparent && kind in [.button, .toggle_button]
+}
+
+// 0 top, 1 middle, 2 bottom, matching ui2_win_label_style.
+fn windows_valign(valign VAlign) int {
+	return match valign {
+		.top { 0 }
+		.middle { 1 }
+		.bottom { 2 }
+	}
 }
 
 fn windows_align(align Align) int {
@@ -833,7 +842,7 @@ fn windows_render_element(parent voidptr, el Element, key string, parent_key str
 
 fn windows_create_element(parent voidptr, el Element, y_offset int) voidptr {
 	wide := el.text.to_wide()
-	hwnd := C.ui2_win_create_widget(windows_widget_kind(el.kind), parent, int(el.frame.x), int(el.frame.y) + y_offset, int(el.frame.width), windows_native_height(el), wide, windows_align(el.text_style.align), windows_bool(el.secure), windows_bool(el.readonly), windows_bool(el.disable_scroll), windows_bool(el.orientation == .vertical))
+	hwnd := C.ui2_win_create_widget(windows_widget_kind(el.kind), parent, int(el.frame.x), int(el.frame.y) + y_offset, int(el.frame.width), windows_native_height(el), wide, windows_align(el.text_style.align), windows_valign(el.text_style.valign), windows_bool(el.secure), windows_bool(el.readonly), windows_bool(el.disable_scroll), windows_bool(el.orientation == .vertical))
 	unsafe { free(wide) }
 	return hwnd
 }

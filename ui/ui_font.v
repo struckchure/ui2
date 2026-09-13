@@ -56,6 +56,20 @@ fn font_line_height(points f64) f64 {
 	return font_em_pixels(points) * 1.25
 }
 
+// text_block_top is the y a block of text `content` tall starts at, inside a frame
+// `height` tall beginning at `y`. A block taller than its frame always starts at the
+// top, so the text that is shown is the text from the beginning.
+fn text_block_top(y f64, height f64, content f64, valign VAlign) f64 {
+	if content >= height {
+		return y
+	}
+	return match valign {
+		.top { y }
+		.middle { y + (height - content) / 2 }
+		.bottom { y + height - content }
+	}
+}
+
 // wrap_text_lines_measured breaks text into the lines a multi-line label draws: at
 // its own newlines, and at the space before whichever word would take a line past
 // `width`. A word too wide to fit alone is left whole, to be truncated when it is

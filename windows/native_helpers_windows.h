@@ -355,10 +355,14 @@ static inline void ui2_win_set_window_title(void *hwnd, const wchar_t *title) {
 	if (hwnd != NULL) SetWindowTextW((HWND)hwnd, title == NULL ? L"" : title);
 }
 
-static inline DWORD ui2_win_label_style(int alignment) {
-	if (alignment == 1) return SS_CENTER | SS_CENTERIMAGE;
-	if (alignment == 2) return SS_RIGHT | SS_CENTERIMAGE;
-	return SS_LEFT | SS_CENTERIMAGE;
+// valign: 0 top, 1 middle, 2 bottom. A static control can sit its text at the top of
+// its rectangle or centred in it; there is no style for the bottom, so a label asking
+// for it is centred until these are drawn by hand.
+static inline DWORD ui2_win_label_style(int alignment, int valign) {
+	DWORD vertical = valign == 0 ? 0 : SS_CENTERIMAGE;
+	if (alignment == 1) return SS_CENTER | vertical;
+	if (alignment == 2) return SS_RIGHT | vertical;
+	return SS_LEFT | vertical;
 }
 
 static inline DWORD ui2_win_edit_style(int alignment) {
@@ -368,7 +372,7 @@ static inline DWORD ui2_win_edit_style(int alignment) {
 }
 
 static inline void *ui2_win_create_widget(int kind, void *parent_ptr, int x, int y,
-		int width, int height, const wchar_t *text, int alignment, int secure,
+		int width, int height, const wchar_t *text, int alignment, int valign, int secure,
 		int readonly, int disable_scroll, int vertical) {
 	HWND parent = (HWND)parent_ptr;
 	DWORD style = WS_CHILD | WS_VISIBLE;
@@ -387,7 +391,7 @@ static inline void *ui2_win_create_widget(int kind, void *parent_ptr, int x, int
 		break;
 	case UI2_WIN_LABEL:
 		class_name = L"STATIC";
-		style |= ui2_win_label_style(alignment) | SS_NOTIFY;
+		style |= ui2_win_label_style(alignment, valign) | SS_NOTIFY;
 		ex_style = WS_EX_TRANSPARENT;
 		break;
 	case UI2_WIN_IMAGE:

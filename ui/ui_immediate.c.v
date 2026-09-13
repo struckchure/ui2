@@ -2745,21 +2745,22 @@ fn page_focused_text_area(direction int) {
 			align: text_align(style.align)
 			vertical_align: .middle
 		}
-		if style.lines > 1 {
-			parts := wrap_text_lines(ctx, t, w, style.lines, cfg)
-			line_h := font_line_height(style.size)
-			total_h := f64(parts.len) * line_h
-			start_y := y + (h - total_h) / 2 + line_h / 2
-			for i, part in parts {
-				if i >= style.lines {
-					break
-				}
-				line := if fit { fit_text(ctx, part, w, cfg) } else { part }
-				ctx.draw_text(int(text_x), int(start_y + f64(i) * line_h), line, cfg)
-			}
+		line_h := font_line_height(style.size)
+		parts := if style.lines > 1 {
+			wrap_text_lines(ctx, t, w, style.lines, cfg)
 		} else {
-			ctx.draw_text(text_x, text_y, if fit { fit_text(ctx, t, w, cfg) } else { t },
-				cfg)
+			[t]
+		}
+		// The text block is as tall as the lines it ended up with, and valign says
+		// where that block sits in a frame with room to spare. draw_text is given the
+		// centre of each line because the config centres a line on its baseline box.
+		start_y := text_block_top(y, h, f64(parts.len) * line_h, style.valign) + line_h / 2
+		for i, part in parts {
+			if i >= style.lines {
+				break
+			}
+			line := if fit { fit_text(ctx, part, w, cfg) } else { part }
+			ctx.draw_text(int(text_x), int(start_y + f64(i) * line_h), line, cfg)
 		}
 	}
 

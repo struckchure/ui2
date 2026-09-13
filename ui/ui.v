@@ -30,6 +30,15 @@ pub enum Align {
 	right
 }
 
+// Where a label's text sits in a frame taller than the text itself. Both backends
+// draw from the top by default, which is what a label sized to its own text wants;
+// a label given a box — a table cell, a caption panel — usually wants otherwise.
+pub enum VAlign {
+	top
+	middle
+	bottom
+}
+
 pub enum Kind {
 	screen
 	view
@@ -76,6 +85,7 @@ pub:
 	vertical_align     string
 	link               string
 	align              Align
+	valign             VAlign = .middle
 	head_indent        f64
 	first_line_indent  f64
 	hyphenation_factor f64

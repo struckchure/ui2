@@ -1205,7 +1205,7 @@ fn native_create_element(el Element) NativeView {
 			native_new_scroll(element_rect(el.frame), el.box, el.persistent_scrollbars)
 		}
 		.label {
-			native_new_label(element_rect(el.frame), el.text, el.text_style.color, el.text_style.size, el.text_style.bold, el.text_style.italic, el.text_style.underline, align_value(el.text_style.align), el.text_style.lines)
+			native_new_label(element_rect(el.frame), el.text, el.text_style.color, el.text_style.size, el.text_style.bold, el.text_style.italic, el.text_style.underline, align_value(el.text_style.align), el.text_style.lines, el.text_style.valign)
 		}
 		.image {
 			native_new_image(element_rect(el.frame), el.image_path, el.rotation)
@@ -1251,7 +1251,7 @@ fn native_update_element(native NativeView, el Element, declared_text_changed bo
 			native_set_scrollbar_mode(native, el.persistent_scrollbars)
 		}
 		.label {
-			native_update_label(native, element_rect(el.frame), el.text, el.text_style.color, el.text_style.size, el.text_style.bold, el.text_style.italic, el.text_style.underline, align_value(el.text_style.align), el.text_style.lines)
+			native_update_label(native, element_rect(el.frame), el.text, el.text_style.color, el.text_style.size, el.text_style.bold, el.text_style.italic, el.text_style.underline, align_value(el.text_style.align), el.text_style.lines, el.text_style.valign)
 		}
 		.image {
 			native_update_image(native, element_rect(el.frame), el.image_path, el.rotation)
@@ -1802,13 +1802,14 @@ fn native_update_image(image_view NativeView, frame NativeRect, path string, rot
 	}
 }
 
-fn native_new_label(frame NativeRect, text string, text_hex u32, size f64, bold bool, italic bool, underline bool, align int, lines int) NativeView {
+fn native_new_label(frame NativeRect, text string, text_hex u32, size f64, bold bool, italic bool, underline bool, align int, lines int, valign VAlign) NativeView {
 	label_view := macos.msg_id_rect(macos.alloc('NSTextField'), 'initWithFrame:', appkit_rect(frame))
-	native_update_label(label_view, frame, text, text_hex, size, bold, italic, underline, align, lines)
+	native_update_label(label_view, frame, text, text_hex, size, bold, italic, underline,
+		align, lines, valign)
 	return label_view
 }
 
-fn native_update_label(label_view NativeView, frame NativeRect, text string, text_hex u32, size f64, bold bool, italic bool, underline bool, align int, lines int) {
+fn native_update_label(label_view NativeView, frame NativeRect, text string, text_hex u32, size f64, bold bool, italic bool, underline bool, align int, lines int, valign VAlign) {
 	native_set_frame(label_view, frame)
 	macos.msg_void1(label_view, 'setStringValue:', macos.nsstring(text))
 	macos.msg_void_bool(label_view, 'setEditable:', false)
@@ -1829,6 +1830,50 @@ fn native_update_label(label_view NativeView, frame NativeRect, text string, tex
 	} else {
 		1
 	}))
+	native_apply_label_valign(label_view, frame, lines, valign)
+}
+
+// A text field draws its content from the top of its frame however tall that frame
+// is, so a label given a box taller than its text needs the text block moved to sit
+// in the middle or at the bottom. The field is shrunk to the block rather than the
+// text being offset inside it, which keeps the horizontal alignment intact.
+fn native_apply_label_valign(label_view NativeView, frame NativeRect, lines int, valign VAlign) {
+	if valign == .top || frame.height <= 0 {
+		return
+	}
+	content := native_label_content_height(label_view, lines)
+	if content <= 0 || content >= frame.height {
+		return
+	}
+	offset := if valign == .middle { (frame.height - content) / 2 } else { frame.height - content }
+	native_set_frame(label_view, NativeRect{
+		x:      frame.x
+		y:      frame.y + offset
+		width:  frame.width
+		height: content
+	})
+}
+
+// How tall the field's text is. One line is the font's own line height, which its
+// metrics give directly — no layout pass, so a grid of labels does not pay for a
+// measurement it could work out.
+//
+// Wrapped text is a different question — how tall it is depends on where the lines
+// broke — and answering it needs the text measured against a width. This backend has
+// no way to do that: sizing a cell to fit measures it unbounded, so it reports one
+// line, and the macos bindings expose no message returning an NSSize. A wrapping
+// label is left at the top until they do, which is where it was drawn before valign.
+fn native_label_content_height(label_view NativeView, lines int) f64 {
+	if lines > 1 {
+		return 0
+	}
+	font := macos.msg_id(label_view, 'font')
+	if native_is_nil(font) {
+		return 0
+	}
+	// descender is reported as a negative distance below the baseline.
+	return macos.msg_f64(font, 'ascender') - macos.msg_f64(font, 'descender') +
+		macos.msg_f64(font, 'leading')
 }
 
 // NSLineBreakMode values.
