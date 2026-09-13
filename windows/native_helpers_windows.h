@@ -356,10 +356,16 @@ static inline void ui2_win_set_window_title(void *hwnd, const wchar_t *title) {
 	if (hwnd != NULL) SetWindowTextW((HWND)hwnd, title == NULL ? L"" : title);
 }
 
+// SS_NOPREFIX because a label's text is text. Without it a static reads an ampersand
+// as the marker before an accelerator key, swallowing it and underlining whatever
+// follows, and the measurement below — which counts the ampersand as the character it
+// is, as every other backend draws it — would wrap at a different width than the
+// control does and place the block at the wrong height.
 static inline DWORD ui2_win_label_style(int alignment) {
-	if (alignment == 1) return SS_CENTER;
-	if (alignment == 2) return SS_RIGHT;
-	return SS_LEFT;
+	DWORD alignment_style = SS_LEFT;
+	if (alignment == 1) alignment_style = SS_CENTER;
+	if (alignment == 2) alignment_style = SS_RIGHT;
+	return alignment_style | SS_NOPREFIX;
 }
 
 // Height the control's own text needs, in the font the control is using.

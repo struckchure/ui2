@@ -60,6 +60,8 @@ fn C.ui2_win_create_tooltip(hwnd voidptr, text &u16) voidptr
 
 fn C.ui2_win_tooltip_add_target(tooltip voidptr, target voidptr) int
 
+fn C.ui2_win_border_width(width f64, extent int) int
+
 fn C.ui2_win_destroy_tooltip(tooltip voidptr)
 
 fn C.ui2_win_focus(hwnd voidptr)
@@ -967,16 +969,29 @@ fn windows_place_held_label(hwnd voidptr, el Element) {
 	if text_hwnd == hwnd {
 		return
 	}
-	left := int(el.box.border_left)
-	top := int(el.box.border_top)
-	width := int(el.frame.width) - left - int(el.box.border_right)
-	height := int(el.frame.height) - top - int(el.box.border_bottom)
-	if width <= 0 || height <= 0 {
-		return
+	frame_width := int(el.frame.width)
+	frame_height := int(el.frame.height)
+	// Where the border really ends, asked of the same rounding that paints it: any
+	// border at all covers a whole pixel, so an inset taken by truncating would leave
+	// the control drawing over the border it was moved aside for.
+	left := C.ui2_win_border_width(el.box.border_left, frame_width)
+	top := C.ui2_win_border_width(el.box.border_top, frame_height)
+	right := C.ui2_win_border_width(el.box.border_right, frame_width)
+	bottom := C.ui2_win_border_width(el.box.border_bottom, frame_height)
+	// Borders wide enough to meet leave nothing to draw text on. The control is still
+	// given that nothing, because a control left at the size it had is a control
+	// drawing over them.
+	mut width := frame_width - left - right
+	if width < 0 {
+		width = 0
+	}
+	mut height := frame_height - top - bottom
+	if height < 0 {
+		height = 0
 	}
 	mut y := top
 	mut drawn := height
-	if el.text.len > 0 {
+	if el.text.len > 0 && width > 0 && height > 0 {
 		content := int(C.ui2_win_label_content_height(text_hwnd, width, el.text_style.lines))
 		if content > 0 && content < height {
 			drawn = content
