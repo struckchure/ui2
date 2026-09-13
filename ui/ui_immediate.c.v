@@ -1673,7 +1673,7 @@ fn page_focused_text_area(direction int) {
 			.label {
 				x := el.frame.x + off_x
 				y := el.frame.y + off_y
-				draw_text(ctx, el.text, x, y, el.frame.width, el.frame.height, el.text_style)
+				draw_label_text(ctx, el.text, x, y, el.frame.width, el.frame.height, el.text_style)
 			}
 			.image {
 				x := el.frame.x + off_x
@@ -2661,8 +2661,16 @@ fn page_focused_text_area(direction int) {
 	}
 
 	// draw_text draws text that belongs to a box, shortening it when it does
-	// not fit.
+	// not fit. A control draws its text down the middle of the box whatever the
+	// style says, because a label is the only thing the native backends let
+	// place its text, and a style shared with one must not move a button.
 	fn draw_text(ctx &gg.Context, t string, x f64, y f64, w f64, h f64, style TextStyle) {
+		draw_text_in_box(ctx, t, x, y, w, h, centered_text_style(style), true)
+	}
+
+	// draw_label_text draws a label, the one control whose style says where its
+	// text sits in a box with room to spare.
+	fn draw_label_text(ctx &gg.Context, t string, x f64, y f64, w f64, h f64, style TextStyle) {
 		draw_text_in_box(ctx, t, x, y, w, h, style, true)
 	}
 
@@ -2670,7 +2678,17 @@ fn page_focused_text_area(direction int) {
 	// Those controls place the caret by measuring the whole string, so a
 	// shortened line would leave the caret sitting past the end of it.
 	fn draw_editable_text(ctx &gg.Context, t string, x f64, y f64, w f64, h f64, style TextStyle) {
-		draw_text_in_box(ctx, t, x, y, w, h, style, false)
+		draw_text_in_box(ctx, t, x, y, w, h, centered_text_style(style), false)
+	}
+
+	// A style that draws down the middle of its box. The caret and the selection
+	// of an editable field are measured from the middle, so its text has to be
+	// drawn there too.
+	fn centered_text_style(style TextStyle) TextStyle {
+		return TextStyle{
+			...style
+			valign: .middle
+		}
 	}
 
 	// draw_text_field_selection paints the selected rune range before its text.
