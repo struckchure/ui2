@@ -141,6 +141,7 @@ fn C.ui2_win_scroll_message(hwnd voidptr, wparam usize) int
 fn C.ui2_win_scroll_wheel(hwnd voidptr, wparam usize) int
 
 fn C.ui2_win_scroll_to_rect(hwnd voidptr, top int, bottom int) int
+fn C.ui2_win_set_scroll_position(hwnd voidptr, position int) int
 
 fn C.ui2_win_capture_mouse(hwnd voidptr)
 
@@ -689,16 +690,29 @@ pub fn scroll_offset(id string) f64 {
 	return f64(st.scroll_positions[key] or { 0 })
 }
 
-// scroll_to_offset puts a Scroll element at the given vertical offset. The element's
-// range is only known while it renders, so the request is kept and applied — clamped
-// to the range it turns out to have — the next time it is laid out. That is what lets
-// a screen open where it was last left, before the element exists.
+// scroll_to_offset puts a Scroll element at the given vertical offset. An element on
+// screen moves at once. One that does not exist yet has no range to clamp against, so
+// the request is kept and taken up the next time the element is laid out — that is
+// what lets a screen open where it was last left.
 pub fn scroll_to_offset(id string, offset f64) {
 	mut st := windows_state()
 	if id.len == 0 {
 		return
 	}
-	st.pending_scroll[id] = if offset < 0 { 0 } else { int(offset) }
+	wanted := if offset < 0 { 0 } else { int(offset) }
+	if (st.view_kinds[id] or { Kind.view }) == .scroll {
+		key := st.view_keys[id] or { '' }
+		if key.len > 0 {
+			if hwnd := st.views[id] {
+				position := C.ui2_win_set_scroll_position(hwnd, wanted)
+				st.scroll_positions[key] = position
+				windows_reposition_scroll_children(key, position)
+				st.pending_scroll.delete(id)
+				return
+			}
+		}
+	}
+	st.pending_scroll[id] = wanted
 }
 
 pub fn scroll_to_rect(id string, _x f64, y f64, _width f64, height f64) {

@@ -1280,6 +1280,21 @@ static inline int ui2_win_scroll_to_rect(void *hwnd_ptr, int top, int bottom) {
 	return info.nPos;
 }
 
+// Put a scroll bar at a position rather than scrolling the least amount that brings
+// a rect into view. SetScrollInfo clamps to the range the element currently has, and
+// reading back reports where it settled.
+static inline int ui2_win_set_scroll_position(void *hwnd_ptr, int position) {
+	HWND hwnd = (HWND)hwnd_ptr;
+	SCROLLINFO info;
+	ZeroMemory(&info, sizeof(info));
+	info.cbSize = sizeof(info);
+	info.fMask = SIF_POS;
+	info.nPos = position;
+	SetScrollInfo(hwnd, SB_VERT, &info, TRUE);
+	GetScrollInfo(hwnd, SB_VERT, &info);
+	return info.nPos;
+}
+
 static inline void ui2_win_capture_mouse(void *hwnd) {
 	if (hwnd != NULL) SetCapture((HWND)hwnd);
 }

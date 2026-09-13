@@ -458,6 +458,19 @@ fn test_wrap_text_lines_leaves_the_overflow_on_its_last_line() {
 	assert wrap_text_lines_measured('a b c d e f', 1, 3, measure_by_length).len == 3
 }
 
+fn test_wrap_text_lines_keeps_the_paragraphs_the_budget_cut_off() {
+	// The budget runs out on "b", which fits on its own: without the paragraph after it
+	// folded in, the line is drawn untruncated and "c" disappears with nothing to show
+	// for it.
+	assert wrap_text_lines_measured('a b\nc', 1, 2, measure_by_length) == ['a', 'b c']
+	// The same when the budget ends at a paragraph boundary rather than mid-line.
+	assert wrap_text_lines_measured('a\nb\nc', 40, 2, measure_by_length) == ['a', 'b c']
+	assert wrap_text_lines_measured('a\nb\nc\nd', 40, 2, measure_by_length) == ['a', 'b c d']
+	// Nothing is folded in when the paragraphs fit the budget exactly.
+	assert wrap_text_lines_measured('a\nb', 40, 2, measure_by_length) == ['a', 'b']
+	assert wrap_text_lines_measured('a\nb\nc', 40, 3, measure_by_length) == ['a', 'b', 'c']
+}
+
 fn test_wrap_text_lines_keeps_a_word_wider_than_the_line_whole() {
 	// Splitting mid-word would read worse than letting the draw truncate it.
 	assert wrap_text_lines_measured('short verylongunbreakableword', 5, 3, measure_by_length) == [

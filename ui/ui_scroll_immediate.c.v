@@ -48,8 +48,15 @@ $if (android || linux || ((macos || windows) && ui2_custom_rendering ?)) && !ui2
 			g_scroll_parents[id] = parent_id
 		}
 		// Preserve the position across rebuilds and resizes, only clamping when
-		// the content or viewport changes the available range.
-		set_scroll_offset(id, scroll_offset(id), scroll_maximum(id))
+		// the content or viewport changes the available range. A position asked for
+		// before this view existed takes precedence, now that there is a range to
+		// clamp it to.
+		mut requested := scroll_offset(id)
+		if pending := g_pending_scroll[id] {
+			requested = pending
+			g_pending_scroll.delete(id)
+		}
+		set_scroll_offset(id, requested, scroll_maximum(id))
 		offset := scroll_offset(id)
 		area := intersect_rect(frame, clip)
 		if enabled && area.width > 0 && area.height > 0 {

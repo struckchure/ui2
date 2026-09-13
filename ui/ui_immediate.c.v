@@ -474,7 +474,10 @@ $if (android || linux || ((macos || windows) && ui2_custom_rendering ?)) && !ui2
 			set_scroll_offset(id, wanted, scroll_maximum(id))
 			return
 		}
-		g_scroll_offsets[id] = wanted
+		// The view does not exist yet, so its range is unknown and the offset cannot be
+		// stored as a live position: the next frame rendered without the view would
+		// prune it. Hold the request until the view registers and can clamp it.
+		g_pending_scroll[id] = wanted
 	}
 
 	pub fn scroll_to_rect(id string, _x f64, y f64, _width f64, height f64) {

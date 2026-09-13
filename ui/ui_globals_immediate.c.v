@@ -21,6 +21,10 @@ $if (android || linux || ((macos || windows) && ui2_custom_rendering ?)) && !ui2
 	// Viewports are full layout boxes; areas are their visible, hittable parts.
 	// Using the clipped height for the range makes nested panes overscroll.
 	__global g_scroll_viewports = map[string]Rect{}
+	// Offsets asked for before their scroll view existed. They are kept apart from
+	// g_scroll_offsets because prune_unmounted_state drops the offset of every view
+	// missing from a frame, which is exactly what a view that has not mounted yet is.
+	__global g_pending_scroll = map[string]f64{}
 	__global g_scroll_order = []string{}
 	__global g_scroll_parents = map[string]string{}
 	__global g_scrollbar_geometries = map[string]ScrollbarGeometry{}

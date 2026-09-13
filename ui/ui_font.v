@@ -65,35 +65,50 @@ fn wrap_text_lines_measured(text string, width f64, limit int, measure fn (strin
 	if limit <= 1 || width <= 0 {
 		return text.split('\n')
 	}
+	paragraphs := text.split('\n')
 	mut lines := []string{}
-	for paragraph in text.split('\n') {
+	for index, paragraph in paragraphs {
 		words := paragraph.split(' ')
 		mut current := ''
-		for index, word in words {
+		for word_index, word in words {
 			candidate := if current.len == 0 { word } else { current + ' ' + word }
 			if current.len == 0 || measure(candidate) <= width {
 				current = candidate
 				continue
 			}
 			if lines.len >= limit - 1 {
-				// This is the last line there is room for, so the words that did not
-				// fit stay on it to be truncated rather than quietly disappearing.
-				current = if index + 1 < words.len {
-					candidate + ' ' + words[index + 1..].join(' ')
-				} else {
-					candidate
-				}
-				break
+				// The last line there is room for. Everything still to come stays on it
+				// so the draw truncates it, rather than text quietly disappearing.
+				lines << text_with_overflow(candidate, words[word_index + 1..], paragraphs[
+					index + 1..])
+				return lines
 			}
 			lines << current
 			current = word
 		}
+		if lines.len == limit - 1 && index + 1 < paragraphs.len {
+			// The budget ends on this line but the text does not: the paragraphs after
+			// it belong here too, for the same reason.
+			lines << text_with_overflow(current, []string{}, paragraphs[index + 1..])
+			return lines
+		}
 		lines << current
 		if lines.len >= limit {
-			break
+			return lines
 		}
 	}
-	return if lines.len > limit { lines[..limit] } else { lines }
+	return lines
+}
+
+// text_with_overflow puts everything a label has no room left for onto its last line:
+// the words after `head` on that line, then the paragraphs after it. They are joined
+// with spaces because what comes back is one line, and drawing truncates it, which is
+// how the text shows that it continues.
+fn text_with_overflow(head string, words []string, paragraphs []string) string {
+	mut parts := [head]
+	parts << words
+	parts << paragraphs
+	return parts.join(' ')
 }
 
 // ── Font files ─────────────────────────────────────────────────────
