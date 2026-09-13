@@ -382,6 +382,11 @@ pub fn set_text(id string, t string) {
 		native_select_dropdown_item(native, t)
 		return
 	}
+	if kind == .label {
+		// A label is its text field, or the view holding one.
+		native_set_text(label_text_field(native), t)
+		return
+	}
 	native_set_text(native, t)
 }
 
@@ -1488,6 +1493,7 @@ fn forget_descendant_nodes(key string) {
 		st.node_kinds.delete(child_key_)
 		st.node_text_direct.delete(child_key_)
 		st.node_interactive.delete(child_key_)
+		st.node_label_boxed.delete(child_key_)
 		st.node_secure.delete(child_key_)
 		st.node_declared_text.delete(child_key_)
 		st.node_content_sig.delete(child_key_)
@@ -1546,6 +1552,7 @@ fn remove_stale_nodes(active map[string]bool) {
 		st.node_kinds.delete(key)
 		st.node_text_direct.delete(key)
 		st.node_interactive.delete(key)
+		st.node_label_boxed.delete(key)
 		st.node_secure.delete(key)
 		st.node_declared_text.delete(key)
 		st.node_content_sig.delete(key)
@@ -1603,6 +1610,7 @@ fn remove_stale_nodes_below(root_key string, active map[string]bool) {
 		st.node_kinds.delete(key)
 		st.node_text_direct.delete(key)
 		st.node_interactive.delete(key)
+		st.node_label_boxed.delete(key)
 		st.node_secure.delete(key)
 		st.node_declared_text.delete(key)
 		st.node_content_sig.delete(key)

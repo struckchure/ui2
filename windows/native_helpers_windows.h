@@ -1342,6 +1342,15 @@ static inline int ui2_win_set_scroll_position(void *hwnd_ptr, int position) {
 	return info.nPos;
 }
 
+// The static control a label draws with: the child of the view holding it, or the
+// control itself when the label is not held in one.
+static inline void *ui2_win_label_text_hwnd(void *hwnd_ptr) {
+	HWND hwnd = (HWND)hwnd_ptr;
+	if (hwnd == NULL) return NULL;
+	HWND child = GetWindow(hwnd, GW_CHILD);
+	return child != NULL ? (void *)child : (void *)hwnd;
+}
+
 static inline void ui2_win_capture_mouse(void *hwnd) {
 	if (hwnd != NULL) SetCapture((HWND)hwnd);
 }

@@ -26,6 +26,7 @@ fn C.ui2_win_set_window_title(hwnd voidptr, title &u16)
 
 fn C.ui2_win_create_widget(kind int, parent voidptr, x int, y int, width int, height int, text &u16, alignment int, secure int, readonly int, disable_scroll int, vertical int) voidptr
 fn C.ui2_win_label_content_height(hwnd voidptr, width int, lines int) int
+fn C.ui2_win_label_text_hwnd(hwnd voidptr) voidptr
 
 fn C.ui2_win_show_main_window(hwnd voidptr)
 
@@ -258,6 +259,7 @@ mut:
 	toggle_ids         map[u64]string
 	toggle_views       map[u64]voidptr
 	scroll_positions   map[string]int
+	node_label_boxed   map[string]bool
 	pending_scroll     map[string]int // Scroll element id -> offset to apply when it renders
 	run_config         WindowsRunConfig
 	rendering          bool
@@ -306,6 +308,7 @@ const windows_state_singleton = &WindowsState{
 	toggle_ids: map[u64]string{}
 	toggle_views: map[u64]voidptr{}
 	scroll_positions: map[string]int{}
+	node_label_boxed: map[string]bool{}
 	pending_scroll: map[string]int{}
 	suppress_click: map[u64]bool{}
 }
@@ -335,13 +338,22 @@ fn windows_place_label(key string, hwnd voidptr, el Element, y_offset int) {
 	if el.text_style.valign == .top || el.frame.height <= 0 || el.text.len == 0 {
 		return
 	}
-	content := f64(C.ui2_win_label_content_height(hwnd, int(el.frame.width), el.text_style.lines))
+	boxed := windows_label_needs_container(el)
+	text_hwnd := C.ui2_win_label_text_hwnd(hwnd)
+	content := f64(C.ui2_win_label_content_height(text_hwnd, int(el.frame.width), el.text_style.lines))
 	if content <= 0 || content >= el.frame.height {
+		return
+	}
+	top := text_block_top(el.frame.y, el.frame.height, content, el.text_style.valign)
+	if boxed {
+		// The holder keeps the declared frame; only the drawing moves inside it.
+		C.ui2_win_set_widget_frame(text_hwnd, windows_widget_kind(el.kind), 0, int(top - el.frame.y),
+			int(el.frame.width), int(content))
 		return
 	}
 	placed := Rect{
 		x:      el.frame.x
-		y:      text_block_top(el.frame.y, el.frame.height, content, el.text_style.valign)
+		y:      top
 		width:  el.frame.width
 		height: content
 	}
@@ -862,10 +874,38 @@ fn windows_render_element(parent voidptr, el Element, key string, parent_key str
 	return hwnd
 }
 
+// Placing a label's text means sizing its static control to the text, and that
+// control is what a tooltip, a context menu and a click binding are keyed to. A label
+// with any of those is put inside a container covering the declared frame, and the
+// container is what the rest of the backend holds, so they answer over all of it. A
+// label with none stays a bare control, which is the overwhelming majority of them.
+fn windows_label_needs_container(el Element) bool {
+	return el.kind == .label && (el.tooltip.len > 0 || el.menu.len > 0)
+}
+
 fn windows_create_element(parent voidptr, el Element, y_offset int) voidptr {
 	wide := el.text.to_wide()
-	hwnd := C.ui2_win_create_widget(windows_widget_kind(el.kind), parent, int(el.frame.x), int(el.frame.y) + y_offset, int(el.frame.width), windows_native_height(el), wide, windows_align(el.text_style.align), windows_bool(el.secure), windows_bool(el.readonly), windows_bool(el.disable_scroll), windows_bool(el.orientation == .vertical))
+	boxed := windows_label_needs_container(el)
+	mut host := parent
+	mut x := int(el.frame.x)
+	mut y := int(el.frame.y) + y_offset
+	mut container := voidptr(unsafe { nil })
+	if boxed {
+		empty := ''.to_wide()
+		container = C.ui2_win_create_widget(windows_widget_kind(.view), parent, x, y,
+			int(el.frame.width), int(el.frame.height), empty, 0, 0, 0, 0, 0)
+		unsafe { free(empty) }
+		host = container
+		x = 0
+		y = 0
+	}
+	hwnd := C.ui2_win_create_widget(windows_widget_kind(el.kind), host, x, y, int(el.frame.width),
+		windows_native_height(el), wide, windows_align(el.text_style.align), windows_bool(el.secure),
+		windows_bool(el.readonly), windows_bool(el.disable_scroll), windows_bool(el.orientation == .vertical))
 	unsafe { free(wide) }
+	if boxed {
+		return container
+	}
 	return hwnd
 }
 
@@ -893,7 +933,7 @@ fn windows_widget_kind(kind Kind) int {
 }
 
 fn windows_structural_signature(el Element) string {
-	return '${int(el.kind)}:${windows_bool(el.secure)}:${windows_align(el.text_style.align)}:${windows_bool(el.disable_scroll)}:${windows_bool(el.native_style)}:${int(el.orientation)}'
+	return '${int(el.kind)}:${windows_bool(el.secure)}:${windows_align(el.text_style.align)}:${windows_bool(windows_label_needs_container(el))}:${windows_bool(el.disable_scroll)}:${windows_bool(el.native_style)}:${int(el.orientation)}'
 }
 
 fn windows_content_height(children []Element) int {
@@ -921,10 +961,15 @@ fn windows_update_element(key string, hwnd voidptr, el Element, y_offset int, cr
 	C.ui2_win_show(hwnd, windows_bool(!el.hidden))
 	C.ui2_win_enable(hwnd, windows_bool(el.enabled))
 	declared_changed := (st.node_declared_text[key] or { '' }) != el.text
+	// A held label draws with the control inside it; everything else draws with itself.
+	mut text_hwnd := hwnd
+	if el.kind == .label {
+		text_hwnd = C.ui2_win_label_text_hwnd(hwnd)
+	}
 	match el.kind {
 		.label, .button, .checkbox, .switch_control, .toggle_button {
-			if declared_changed || windows_native_text(hwnd) != el.text {
-				windows_set_native_text(hwnd, el.text)
+			if declared_changed || windows_native_text(text_hwnd) != el.text {
+				windows_set_native_text(text_hwnd, el.text)
 			}
 			if el.kind in [.checkbox, .switch_control, .toggle_button] {
 				C.ui2_win_set_checked(hwnd, windows_bool(el.checked))
@@ -979,10 +1024,12 @@ fn windows_update_element(key string, hwnd voidptr, el Element, y_offset int, cr
 		.view, .scroll, .screen {}
 	}
 	st.node_declared_text[key] = el.text
-	windows_update_style(key, hwnd, el)
+	windows_update_style(key, text_hwnd, el)
+	// The tooltip goes on the outer window, which is the declared frame.
 	windows_update_tooltip(key, hwnd, el.tooltip)
 	if el.kind == .label {
 		C.ui2_win_invalidate_parent(hwnd)
+		C.ui2_win_invalidate(text_hwnd)
 	}
 	C.ui2_win_invalidate(hwnd)
 }
@@ -1222,6 +1269,7 @@ fn windows_remove_stale(active map[string]bool) {
 		st.node_image_path.delete(key)
 		st.node_ids.delete(key)
 		st.node_boxes.delete(key)
+		st.node_label_boxed.delete(key)
 		st.node_text_styles.delete(key)
 		st.scroll_positions.delete(key)
 	}
