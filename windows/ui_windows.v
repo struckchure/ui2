@@ -333,9 +333,14 @@ fn windows_uses_transparent_button_paint(kind Kind, box BoxStyle) bool {
 }
 
 // A static control centres one line of text for itself and can do nothing about a
-// wrapped block, so a label that wants its text anywhere but the top is measured and
-// moved to it. The moved rectangle is what gets remembered, so scrolling the pane it
-// sits in takes the label with it rather than putting it back where it was laid out.
+// wrapped block, so a label is measured and given the rectangle its text really
+// needs. Every label is, not only one placed away from the top: a static draws as
+// many lines as its rectangle has room for, so a frame taller than the line budget
+// would otherwise show more lines than were asked for. Measuring holds it to the
+// budget, and the top of the rectangle is where the alignment puts it.
+//
+// The measured rectangle is what gets remembered, so scrolling the pane it sits in
+// takes the label with it rather than putting it back where it was laid out.
 fn windows_place_label(key string, hwnd voidptr, el Element, y_offset int) {
 	mut st := windows_state()
 	if C.ui2_win_label_text_hwnd(hwnd) != hwnd {
@@ -343,7 +348,7 @@ fn windows_place_label(key string, hwnd voidptr, el Element, y_offset int) {
 		return
 	}
 	mut placed := el.frame
-	if el.text_style.valign != .top && el.frame.height > 0 && el.text.len > 0 {
+	if el.frame.height > 0 && el.text.len > 0 {
 		content := f64(C.ui2_win_label_content_height(hwnd, int(el.frame.width), el.text_style.lines))
 		if content > 0 && content < el.frame.height {
 			placed = Rect{
@@ -962,7 +967,7 @@ fn windows_place_held_label(hwnd voidptr, el Element) {
 	}
 	mut y := top
 	mut drawn := height
-	if el.text.len > 0 && el.text_style.valign != .top {
+	if el.text.len > 0 {
 		content := int(C.ui2_win_label_content_height(text_hwnd, width, el.text_style.lines))
 		if content > 0 && content < height {
 			drawn = content
