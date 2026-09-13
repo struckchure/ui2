@@ -24,7 +24,8 @@ fn C.ui2_win_apply_min_size(hwnd voidptr, lparam isize, width int, height int)
 
 fn C.ui2_win_set_window_title(hwnd voidptr, title &u16)
 
-fn C.ui2_win_create_widget(kind int, parent voidptr, x int, y int, width int, height int, text &u16, alignment int, valign int, secure int, readonly int, disable_scroll int, vertical int) voidptr
+fn C.ui2_win_create_widget(kind int, parent voidptr, x int, y int, width int, height int, text &u16, alignment int, secure int, readonly int, disable_scroll int, vertical int) voidptr
+fn C.ui2_win_label_content_height(hwnd voidptr, width int, lines int) int
 
 fn C.ui2_win_show_main_window(hwnd voidptr)
 
@@ -325,13 +326,28 @@ fn windows_uses_transparent_button_paint(kind Kind, box BoxStyle) bool {
 	return box.transparent && kind in [.button, .toggle_button]
 }
 
-// 0 top, 1 middle, 2 bottom, matching ui2_win_label_style.
-fn windows_valign(valign VAlign) int {
-	return match valign {
-		.top { 0 }
-		.middle { 1 }
-		.bottom { 2 }
+// A static control centres one line of text for itself and can do nothing about a
+// wrapped block, so a label that wants its text anywhere but the top is measured and
+// moved to it. The moved rectangle is what gets remembered, so scrolling the pane it
+// sits in takes the label with it rather than putting it back where it was laid out.
+fn windows_place_label(key string, hwnd voidptr, el Element, y_offset int) {
+	mut st := windows_state()
+	if el.text_style.valign == .top || el.frame.height <= 0 || el.text.len == 0 {
+		return
 	}
+	content := f64(C.ui2_win_label_content_height(hwnd, int(el.frame.width), el.text_style.lines))
+	if content <= 0 || content >= el.frame.height {
+		return
+	}
+	placed := Rect{
+		x:      el.frame.x
+		y:      text_block_top(el.frame.y, el.frame.height, content, el.text_style.valign)
+		width:  el.frame.width
+		height: content
+	}
+	st.node_frames[key] = placed
+	C.ui2_win_set_widget_frame(hwnd, windows_widget_kind(el.kind), int(placed.x), int(placed.y) +
+		y_offset, int(placed.width), int(placed.height))
 }
 
 fn windows_align(align Align) int {
@@ -817,6 +833,12 @@ fn windows_render_element(parent voidptr, el Element, key string, parent_key str
 		box: visual_box
 		text_style: visual_text_style
 	}, y_offset, must_create)
+	if el.kind == .label {
+		windows_place_label(key, hwnd, Element{
+			...el
+			text_style: visual_text_style
+		}, y_offset)
+	}
 	windows_register_bindings(hwnd, el)
 	if el.children.len > 0 {
 		if el.kind == .scroll {
@@ -842,7 +864,7 @@ fn windows_render_element(parent voidptr, el Element, key string, parent_key str
 
 fn windows_create_element(parent voidptr, el Element, y_offset int) voidptr {
 	wide := el.text.to_wide()
-	hwnd := C.ui2_win_create_widget(windows_widget_kind(el.kind), parent, int(el.frame.x), int(el.frame.y) + y_offset, int(el.frame.width), windows_native_height(el), wide, windows_align(el.text_style.align), windows_valign(el.text_style.valign), windows_bool(el.secure), windows_bool(el.readonly), windows_bool(el.disable_scroll), windows_bool(el.orientation == .vertical))
+	hwnd := C.ui2_win_create_widget(windows_widget_kind(el.kind), parent, int(el.frame.x), int(el.frame.y) + y_offset, int(el.frame.width), windows_native_height(el), wide, windows_align(el.text_style.align), windows_bool(el.secure), windows_bool(el.readonly), windows_bool(el.disable_scroll), windows_bool(el.orientation == .vertical))
 	unsafe { free(wide) }
 	return hwnd
 }
@@ -871,9 +893,7 @@ fn windows_widget_kind(kind Kind) int {
 }
 
 fn windows_structural_signature(el Element) string {
-	// valign belongs here because it is baked into the control's window style when the
-	// control is created; a retained control cannot be told about a new one.
-	return '${int(el.kind)}:${windows_bool(el.secure)}:${windows_align(el.text_style.align)}:${windows_valign(el.text_style.valign)}:${windows_bool(el.disable_scroll)}:${windows_bool(el.native_style)}:${int(el.orientation)}'
+	return '${int(el.kind)}:${windows_bool(el.secure)}:${windows_align(el.text_style.align)}:${windows_bool(el.disable_scroll)}:${windows_bool(el.native_style)}:${int(el.orientation)}'
 }
 
 fn windows_content_height(children []Element) int {

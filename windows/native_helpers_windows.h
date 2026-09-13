@@ -25,6 +25,7 @@
 #include <commctrl.h>
 #include <shellapi.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <wchar.h>
 
 #define UI2_WM_REFRESH (WM_APP + 77)
@@ -355,14 +356,51 @@ static inline void ui2_win_set_window_title(void *hwnd, const wchar_t *title) {
 	if (hwnd != NULL) SetWindowTextW((HWND)hwnd, title == NULL ? L"" : title);
 }
 
-// valign: 0 top, 1 middle, 2 bottom. A static control can sit its text at the top of
-// its rectangle or centred in it; there is no style for the bottom, so a label asking
-// for it is centred until these are drawn by hand.
-static inline DWORD ui2_win_label_style(int alignment, int valign) {
-	DWORD vertical = valign == 0 ? 0 : SS_CENTERIMAGE;
-	if (alignment == 1) return SS_CENTER | vertical;
-	if (alignment == 2) return SS_RIGHT | vertical;
-	return SS_LEFT | vertical;
+static inline DWORD ui2_win_label_style(int alignment) {
+	if (alignment == 1) return SS_CENTER;
+	if (alignment == 2) return SS_RIGHT;
+	return SS_LEFT;
+}
+
+// Height the control's own text needs, in the font the control is using.
+// SS_CENTERIMAGE centres a single line of static text and nothing more, so a label is
+// measured and moved rather than styled.
+//
+// One line is the font's own height, which the text metrics give straight away. Only
+// a label allowed to wrap is laid out to find where its lines broke, so a screenful
+// of ordinary labels does not pay for a layout each.
+static inline int ui2_win_label_content_height(void *hwnd_ptr, int width, int lines) {
+	HWND hwnd = (HWND)hwnd_ptr;
+	if (hwnd == NULL || width <= 0) return 0;
+	HDC hdc = GetDC(hwnd);
+	if (hdc == NULL) return 0;
+	HFONT font = (HFONT)SendMessageW(hwnd, WM_GETFONT, 0, 0);
+	HFONT previous = NULL;
+	if (font != NULL) previous = (HFONT)SelectObject(hdc, font);
+	int height = 0;
+	if (lines > 1) {
+		int length = GetWindowTextLengthW(hwnd);
+		wchar_t *text = length > 0
+			? (wchar_t *)malloc((size_t)(length + 1) * sizeof(wchar_t))
+			: NULL;
+		if (text != NULL) {
+			GetWindowTextW(hwnd, text, length + 1);
+			RECT rc;
+			rc.left = 0;
+			rc.top = 0;
+			rc.right = width;
+			rc.bottom = 0;
+			DrawTextW(hdc, text, length, &rc, DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX);
+			height = (int)(rc.bottom - rc.top);
+			free(text);
+		}
+	} else {
+		TEXTMETRICW metrics;
+		if (GetTextMetricsW(hdc, &metrics)) height = (int)metrics.tmHeight;
+	}
+	if (previous != NULL) SelectObject(hdc, previous);
+	ReleaseDC(hwnd, hdc);
+	return height;
 }
 
 static inline DWORD ui2_win_edit_style(int alignment) {
@@ -372,7 +410,7 @@ static inline DWORD ui2_win_edit_style(int alignment) {
 }
 
 static inline void *ui2_win_create_widget(int kind, void *parent_ptr, int x, int y,
-		int width, int height, const wchar_t *text, int alignment, int valign, int secure,
+		int width, int height, const wchar_t *text, int alignment, int secure,
 		int readonly, int disable_scroll, int vertical) {
 	HWND parent = (HWND)parent_ptr;
 	DWORD style = WS_CHILD | WS_VISIBLE;
@@ -391,7 +429,7 @@ static inline void *ui2_win_create_widget(int kind, void *parent_ptr, int x, int
 		break;
 	case UI2_WIN_LABEL:
 		class_name = L"STATIC";
-		style |= ui2_win_label_style(alignment, valign) | SS_NOTIFY;
+		style |= ui2_win_label_style(alignment) | SS_NOTIFY;
 		ex_style = WS_EX_TRANSPARENT;
 		break;
 	case UI2_WIN_IMAGE:
