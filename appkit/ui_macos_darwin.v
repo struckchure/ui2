@@ -73,6 +73,7 @@ mut:
 	view_keys           map[string]string
 	view_kinds          map[string]Kind
 	text_area_direct    map[string]bool
+	label_places        map[string]LabelPlacement
 	nodes               map[string]NativeView
 	node_kinds          map[string]Kind
 	node_text_direct    map[string]bool
@@ -110,6 +111,7 @@ const runtime_state_singleton = &RuntimeState{
 	views: map[string]NativeView{}
 	view_keys: map[string]string{}
 	view_kinds: map[string]Kind{}
+	label_places: map[string]LabelPlacement{}
 	text_area_direct: map[string]bool{}
 	nodes: map[string]NativeView{}
 	node_kinds: map[string]Kind{}
@@ -384,7 +386,11 @@ pub fn set_text(id string, t string) {
 	}
 	if kind == .label {
 		// A label is its text field, or the view holding one.
-		native_set_text(label_text_field(native), t)
+		field := label_text_field(native)
+		native_set_text(field, t)
+		if place := st.label_places[id] {
+			native_place_label_text(field, place.frame, place.lines, place.valign, place.boxed)
+		}
 		return
 	}
 	native_set_text(native, t)
@@ -872,6 +878,7 @@ fn render_root(declared Element) {
 	mut st := state()
 	st.views = map[string]NativeView{}
 	st.view_keys = map[string]string{}
+	st.label_places = map[string]LabelPlacement{}
 	st.view_kinds = map[string]Kind{}
 	st.text_area_direct = map[string]bool{}
 	st.pointer_ids = map[u64]string{}
@@ -1137,6 +1144,14 @@ fn render_element(parent NativeView, el Element, key string, mut active map[stri
 		st.views[el.id] = native
 		st.view_keys[el.id] = key
 		st.view_kinds[el.id] = el.kind
+		if el.kind == .label {
+			st.label_places[el.id] = LabelPlacement{
+				frame:  element_rect(el.frame)
+				lines:  el.text_style.lines
+				valign: el.text_style.valign
+				boxed:  label_needs_container(el)
+			}
+		}
 		if el.kind == .scroll {
 			// The element exists now, so a position asked for before it did can finally
 			// be taken up.
@@ -1579,6 +1594,7 @@ fn clear_subtree_registrations(root_key string) {
 		st.view_keys.delete(id)
 		st.view_kinds.delete(id)
 		st.text_area_direct.delete(id)
+		st.label_places.delete(id)
 	}
 }
 
@@ -1842,6 +1858,17 @@ fn native_new_label(frame NativeRect, text string, text_hex u32, size f64, bold 
 	return container
 }
 
+// What a label's text was last laid out against, kept for the labels that can be
+// written to by id so setting their text can place the new text the same way the
+// layout would have. Only those labels are kept: a grid of thousands of unnamed ones
+// pays nothing for a setter it can never be the target of.
+struct LabelPlacement {
+	frame  NativeRect
+	lines  int
+	valign VAlign
+	boxed  bool
+}
+
 // The text field a label draws with: the view itself, or the one it holds.
 fn label_text_field(view NativeView) NativeView {
 	subviews := macos.msg_id(view, 'subviews')
@@ -1854,12 +1881,6 @@ fn label_text_field(view NativeView) NativeView {
 fn native_update_label(view NativeView, frame NativeRect, text string, text_hex u32, size f64, bold bool, italic bool, underline bool, align int, lines int, valign VAlign, boxed bool) {
 	native_set_frame(view, frame)
 	label_view := if boxed { label_text_field(view) } else { view }
-	if boxed {
-		native_set_frame(label_view, NativeRect{
-			width:  frame.width
-			height: frame.height
-		})
-	}
 	macos.msg_void1(label_view, 'setStringValue:', macos.nsstring(text))
 	macos.msg_void_bool(label_view, 'setEditable:', false)
 	macos.msg_void_bool(label_view, 'setSelectable:', false)
@@ -1879,6 +1900,22 @@ fn native_update_label(view NativeView, frame NativeRect, text string, text_hex 
 	} else {
 		1
 	}))
+	native_place_label_text(label_view, frame, lines, valign, boxed)
+}
+
+// Put the text field back over the whole area the label was laid out with, then move
+// its drawing to where this text wants to sit. Going back first is what lets text
+// that has changed be measured against the label's real width and given all the room
+// the label has, rather than the strip the text before it happened to need.
+fn native_place_label_text(label_view NativeView, frame NativeRect, lines int, valign VAlign, boxed bool) {
+	native_set_frame(label_view, if boxed {
+		NativeRect{
+			width:  frame.width
+			height: frame.height
+		}
+	} else {
+		frame
+	})
 	native_apply_label_valign(label_view, frame, lines, valign, boxed)
 }
 
