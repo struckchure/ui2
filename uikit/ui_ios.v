@@ -557,15 +557,24 @@ fn update_label_view(view View, frame Rect, t string, text_hex u32, size f64, bo
 	macos.msg_void1(lbl, 'setTextColor:', ios.color(text_hex))
 	macos.msg_void1(lbl, 'setFont:', font(size, bold))
 	macos.msg_void_i64(lbl, 'setTextAlignment:', i64(align))
-	macos.msg_void_i64(lbl, 'setNumberOfLines:', i64(lines))
+	budget := label_line_budget(lines)
+	macos.msg_void_i64(lbl, 'setNumberOfLines:', i64(budget))
 	// A label allowed more than one line has to be allowed to wrap onto them; left
 	// truncating, asking for more lines only clips one line instead of filling them.
-	macos.msg_void_i64(lbl, 'setLineBreakMode:', if lines == 1 {
+	macos.msg_void_i64(lbl, 'setLineBreakMode:', if budget == 1 {
 		ns_line_break_by_truncating_tail
 	} else {
 		ns_line_break_by_word_wrapping
 	})
-	place_label_text(lbl, frame, lines, valign, boxed)
+	place_label_text(lbl, frame, budget, valign, boxed)
+}
+
+// What a label is really allowed to draw. UIKit reads a budget of no lines at all as
+// no limit, so a label asked for none would fill its frame with lines nobody asked
+// for, and be measured for its placement from all of them. Every backend makes a
+// budget of one line or less a single truncated line; this is where UIKit does.
+fn label_line_budget(lines int) int {
+	return if lines > 1 { lines } else { 1 }
 }
 
 // Put the label back over the whole area it was laid out with, then move it to where
@@ -581,7 +590,7 @@ fn place_label_text(lbl View, frame Rect, lines int, valign VAlign, boxed bool) 
 	} else {
 		frame
 	}))
-	apply_label_valign(lbl, frame, lines, valign, boxed)
+	apply_label_valign(lbl, frame, label_line_budget(lines), valign, boxed)
 }
 
 // NSLineBreakMode values, shared with UILabel.
