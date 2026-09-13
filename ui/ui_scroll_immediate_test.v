@@ -391,6 +391,38 @@ fn test_text_area_wraps_words_and_preserves_explicit_blank_lines() {
 		assert 'text' !in g_text_area_layouts
 		assert scroll_hit_test(150, 50) == ''
 	}
+
+	fn test_scroll_to_offset_moves_a_registered_scroll_view() {
+		reset_scroll_test_state()
+		frame := rect(0, 0, 100, 100)
+		register_scroll_view('notes', frame, frame, 400, true, true, false)
+		scroll_to_offset('notes', 120)
+		assert scroll_offset('notes') == 120
+		// Past the end settles at the end rather than scrolling into nothing.
+		scroll_to_offset('notes', 10_000)
+		assert scroll_offset('notes') == 300
+		scroll_to_offset('notes', -50)
+		assert scroll_offset('notes') == 0
+	}
+
+	fn test_scroll_to_offset_survives_until_the_view_exists() {
+		reset_scroll_test_state()
+		// A screen that opens where it was last left asks before anything is laid out.
+		scroll_to_offset('notes', 120)
+		assert scroll_offset('notes') == 120
+		frame := rect(0, 0, 100, 100)
+		register_scroll_view('notes', frame, frame, 400, true, true, false)
+		assert scroll_offset('notes') == 120
+	}
+
+	fn test_scroll_to_offset_is_clamped_once_the_range_is_known() {
+		reset_scroll_test_state()
+		scroll_to_offset('notes', 10_000)
+		frame := rect(0, 0, 100, 100)
+		register_scroll_view('notes', frame, frame, 400, true, true, false)
+		// Registering learns the real range, so the stored request is brought inside it.
+		assert scroll_offset('notes') == 300
+	}
 }
 
 fn test_text_area_line_ranges_follow_wrapped_source_runes() {

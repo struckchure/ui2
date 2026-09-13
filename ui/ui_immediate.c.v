@@ -461,6 +461,22 @@ $if (android || linux || ((macos || windows) && ui2_custom_rendering ?)) && !ui2
 		return g_scroll_offsets[id] or { 0.0 }
 	}
 
+	// scroll_to_offset puts a Scroll element at the given vertical offset. Before the
+	// element has been laid out its range is not known yet, so the offset is stored as
+	// asked and register_scroll_view clamps it to the real range on the next frame.
+	// That is what lets a screen open where it was last left.
+	pub fn scroll_to_offset(id string, offset f64) {
+		if id.len == 0 {
+			return
+		}
+		wanted := if offset < 0 { 0.0 } else { offset }
+		if id in g_scroll_viewports {
+			set_scroll_offset(id, wanted, scroll_maximum(id))
+			return
+		}
+		g_scroll_offsets[id] = wanted
+	}
+
 	pub fn scroll_to_rect(id string, _x f64, y f64, _width f64, height f64) {
 		area := g_scroll_viewports[id] or { return }
 		current := scroll_offset(id)
