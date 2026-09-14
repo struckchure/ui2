@@ -25,6 +25,8 @@ fn C.ui2_win_apply_min_size(hwnd voidptr, lparam isize, width int, height int)
 fn C.ui2_win_set_window_title(hwnd voidptr, title &u16)
 
 fn C.ui2_win_create_widget(kind int, parent voidptr, x int, y int, width int, height int, text &u16, alignment int, secure int, readonly int, disable_scroll int, vertical int) voidptr
+fn C.ui2_win_label_content_height(hwnd voidptr, width int, lines int) int
+fn C.ui2_win_label_text_hwnd(hwnd voidptr) voidptr
 
 fn C.ui2_win_show_main_window(hwnd voidptr)
 
@@ -55,6 +57,10 @@ fn C.ui2_win_show(hwnd voidptr, visible int)
 fn C.ui2_win_enable(hwnd voidptr, enabled int)
 
 fn C.ui2_win_create_tooltip(hwnd voidptr, text &u16) voidptr
+
+fn C.ui2_win_tooltip_add_target(tooltip voidptr, target voidptr) int
+
+fn C.ui2_win_border_width(width f64, extent int) int
 
 fn C.ui2_win_destroy_tooltip(tooltip voidptr)
 
@@ -243,6 +249,7 @@ mut:
 	views              map[string]voidptr
 	view_keys          map[string]string
 	view_kinds         map[string]Kind
+	label_frames       map[string]Rect
 	handle_keys        map[u64]string
 	action_ids         map[u64]string
 	change_ids         map[u64]string
@@ -257,6 +264,7 @@ mut:
 	toggle_ids         map[u64]string
 	toggle_views       map[u64]voidptr
 	scroll_positions   map[string]int
+	node_label_boxed   map[string]bool
 	pending_scroll     map[string]int // Scroll element id -> offset to apply when it renders
 	run_config         WindowsRunConfig
 	rendering          bool
@@ -305,6 +313,7 @@ const windows_state_singleton = &WindowsState{
 	toggle_ids: map[u64]string{}
 	toggle_views: map[u64]voidptr{}
 	scroll_positions: map[string]int{}
+	node_label_boxed: map[string]bool{}
 	pending_scroll: map[string]int{}
 	suppress_click: map[u64]bool{}
 }
@@ -323,6 +332,68 @@ fn windows_bool(value bool) int {
 
 fn windows_uses_transparent_button_paint(kind Kind, box BoxStyle) bool {
 	return box.transparent && kind in [.button, .toggle_button]
+}
+
+// Whether a window leaves the background behind it alone. A label paints none of its
+// own on Windows: what shows behind its text is whatever its parent put there, which
+// is what the control colour handler has always answered. The view holding a label
+// has to answer the same, or a label given a border, a tooltip or a menu — any of
+// which is enough to put it in one — would come out white on a parent that is not.
+fn windows_draws_no_background(kind Kind, box BoxStyle) bool {
+	return box.transparent || kind in [.label, .checkbox]
+}
+
+// A static control centres one line of text for itself and can do nothing about a
+// wrapped block, so a label is measured and given the rectangle its text really
+// needs. Every label is, not only one placed away from the top: a static draws as
+// many lines as its rectangle has room for, so a frame taller than the line budget
+// would otherwise show more lines than were asked for. Measuring holds it to the
+// budget, and the top of the rectangle is where the alignment puts it.
+//
+// The measured rectangle is what gets remembered, so scrolling the pane it sits in
+// takes the label with it rather than putting it back where it was laid out.
+fn windows_place_label(key string, hwnd voidptr, el Element, y_offset int) {
+	mut st := windows_state()
+	if C.ui2_win_label_text_hwnd(hwnd) != hwnd {
+		windows_place_held_label(hwnd, el)
+		return
+	}
+	mut placed := el.frame
+	if el.frame.height > 0 && el.text.len > 0 {
+		content := f64(C.ui2_win_label_content_height(hwnd, int(el.frame.width), el.text_style.lines))
+		if content > 0 && content < el.frame.height {
+			placed = Rect{
+				x:      el.frame.x
+				y:      text_block_top(el.frame.y, el.frame.height, content, el.text_style.valign)
+				width:  el.frame.width
+				height: content
+			}
+		}
+	}
+	st.node_frames[key] = placed
+	C.ui2_win_set_widget_frame(hwnd, windows_widget_kind(el.kind), int(placed.x), int(placed.y) +
+		y_offset, int(placed.width), int(placed.height))
+}
+
+// Setting a label's text has to place it again. The label sits on the rectangle the
+// text before it needed, so left alone it clips text that is taller and holds text
+// that is shorter where it no longer belongs.
+fn windows_place_label_text(id string, hwnd voidptr, value string) {
+	st := windows_state()
+	key := st.view_keys[id] or { return }
+	frame := st.label_frames[id] or { return }
+	parent_key := st.node_parents[key] or { '' }
+	mut y_offset := 0
+	if (st.node_kinds[parent_key] or { Kind.view }) == .scroll {
+		y_offset = -(st.scroll_positions[parent_key] or { 0 })
+	}
+	windows_place_label(key, hwnd, Element{
+		kind:       .label
+		text:       value
+		frame:      frame
+		box:        st.node_boxes[key] or { BoxStyle{} }
+		text_style: st.node_text_styles[key] or { TextStyle{} }
+	}, y_offset)
 }
 
 fn windows_align(align Align) int {
@@ -424,6 +495,7 @@ pub fn refresh() {
 	st.views = map[string]voidptr{}
 	st.view_keys = map[string]string{}
 	st.view_kinds = map[string]Kind{}
+	st.label_frames = map[string]Rect{}
 	st.handle_keys = map[u64]string{}
 	st.action_ids = map[u64]string{}
 	st.change_ids = map[u64]string{}
@@ -485,20 +557,32 @@ pub fn set_window_title(title string) {
 pub fn text(id string) string {
 	st := windows_state()
 	hwnd := st.views[id] or { return '' }
+	if (st.view_kinds[id] or { Kind.view }) == .label {
+		// A label is its static control, or the view holding one.
+		return windows_native_text(C.ui2_win_label_text_hwnd(hwnd))
+	}
 	return windows_native_text(hwnd)
 }
 
 pub fn set_text(id string, value string) {
 	mut st := windows_state()
-	hwnd := st.views[id] or { return }
+	outer := st.views[id] or { return }
+	kind := st.view_kinds[id] or { Kind.view }
+	mut hwnd := outer
+	if kind == .label {
+		hwnd = C.ui2_win_label_text_hwnd(outer)
+	}
 	was_rendering := st.rendering
 	st.rendering = true
-	if (st.view_kinds[id] or { Kind.view }) == .dropdown {
+	if kind == .dropdown {
 		wide_value := value.to_wide()
 		C.ui2_win_combo_select_text(hwnd, wide_value)
 		unsafe { free(wide_value) }
 	} else {
 		windows_set_native_text(hwnd, value)
+	}
+	if kind == .label {
+		windows_place_label_text(id, outer, value)
 	}
 	st.rendering = was_rendering
 }
@@ -798,16 +882,35 @@ fn windows_render_element(parent voidptr, el Element, key string, parent_key str
 	st.node_text_styles[key] = visual_text_style
 	st.node_ids[key] = el.id
 	st.handle_keys[windows_handle_id(hwnd)] = key
+	if el.kind == .label {
+		// A held label's static sends its own WM_CTLCOLORSTATIC, so it has to lead
+		// back to the same node or the label loses its colours to the default handler.
+		text_hwnd := C.ui2_win_label_text_hwnd(hwnd)
+		if text_hwnd != hwnd {
+			st.handle_keys[windows_handle_id(text_hwnd)] = key
+		}
+	}
 	if el.id.len > 0 {
 		st.views[el.id] = hwnd
 		st.view_keys[el.id] = key
 		st.view_kinds[el.id] = el.kind
+		if el.kind == .label {
+			// The area the label was laid out with, as against the rectangle its text
+			// ends up on, so text set over it later can be placed the same way.
+			st.label_frames[el.id] = el.frame
+		}
 	}
 	windows_update_element(key, hwnd, Element{
 		...el
 		box: visual_box
 		text_style: visual_text_style
 	}, y_offset, must_create)
+	if el.kind == .label {
+		windows_place_label(key, hwnd, Element{
+			...el
+			text_style: visual_text_style
+		}, y_offset)
+	}
 	windows_register_bindings(hwnd, el)
 	if el.children.len > 0 {
 		if el.kind == .scroll {
@@ -833,9 +936,70 @@ fn windows_render_element(parent voidptr, el Element, key string, parent_key str
 
 fn windows_create_element(parent voidptr, el Element, y_offset int) voidptr {
 	wide := el.text.to_wide()
-	hwnd := C.ui2_win_create_widget(windows_widget_kind(el.kind), parent, int(el.frame.x), int(el.frame.y) + y_offset, int(el.frame.width), windows_native_height(el), wide, windows_align(el.text_style.align), windows_bool(el.secure), windows_bool(el.readonly), windows_bool(el.disable_scroll), windows_bool(el.orientation == .vertical))
+	boxed := label_needs_container(el)
+	mut host := parent
+	mut x := int(el.frame.x)
+	mut y := int(el.frame.y) + y_offset
+	mut container := voidptr(unsafe { nil })
+	if boxed {
+		empty := ''.to_wide()
+		container = C.ui2_win_create_widget(windows_widget_kind(.view), parent, x, y,
+			int(el.frame.width), int(el.frame.height), empty, 0, 0, 0, 0, 0)
+		unsafe { free(empty) }
+		host = container
+		x = 0
+		y = 0
+	}
+	hwnd := C.ui2_win_create_widget(windows_widget_kind(el.kind), host, x, y, int(el.frame.width),
+		windows_native_height(el), wide, windows_align(el.text_style.align), windows_bool(el.secure),
+		windows_bool(el.readonly), windows_bool(el.disable_scroll), windows_bool(el.orientation == .vertical))
 	unsafe { free(wide) }
+	if boxed {
+		return container
+	}
 	return hwnd
+}
+
+// The holder covers the declared frame and is what draws the background and the
+// border, so the static inside it starts past the border and only ever draws text.
+// It is placed again on every pass, because the holder is the window the layout
+// resizes and the static would otherwise keep the size it was made at.
+fn windows_place_held_label(hwnd voidptr, el Element) {
+	text_hwnd := C.ui2_win_label_text_hwnd(hwnd)
+	if text_hwnd == hwnd {
+		return
+	}
+	frame_width := int(el.frame.width)
+	frame_height := int(el.frame.height)
+	// Where the border really ends, asked of the same rounding that paints it: any
+	// border at all covers a whole pixel, so an inset taken by truncating would leave
+	// the control drawing over the border it was moved aside for.
+	left := C.ui2_win_border_width(el.box.border_left, frame_width)
+	top := C.ui2_win_border_width(el.box.border_top, frame_height)
+	right := C.ui2_win_border_width(el.box.border_right, frame_width)
+	bottom := C.ui2_win_border_width(el.box.border_bottom, frame_height)
+	// Borders wide enough to meet leave nothing to draw text on. The control is still
+	// given that nothing, because a control left at the size it had is a control
+	// drawing over them.
+	mut width := frame_width - left - right
+	if width < 0 {
+		width = 0
+	}
+	mut height := frame_height - top - bottom
+	if height < 0 {
+		height = 0
+	}
+	mut y := top
+	mut drawn := height
+	if el.text.len > 0 && width > 0 && height > 0 {
+		content := int(C.ui2_win_label_content_height(text_hwnd, width, el.text_style.lines))
+		if content > 0 && content < height {
+			drawn = content
+			y = int(text_block_top(f64(top), f64(height), f64(content), el.text_style.valign))
+		}
+	}
+	C.ui2_win_set_widget_frame(text_hwnd, windows_widget_kind(el.kind), left, y, width,
+		drawn)
 }
 
 fn windows_native_height(el Element) int {
@@ -862,7 +1026,7 @@ fn windows_widget_kind(kind Kind) int {
 }
 
 fn windows_structural_signature(el Element) string {
-	return '${int(el.kind)}:${windows_bool(el.secure)}:${windows_align(el.text_style.align)}:${windows_bool(el.disable_scroll)}:${windows_bool(el.native_style)}:${int(el.orientation)}'
+	return '${int(el.kind)}:${windows_bool(el.secure)}:${windows_align(el.text_style.align)}:${windows_bool(label_needs_container(el))}:${windows_bool(el.disable_scroll)}:${windows_bool(el.native_style)}:${int(el.orientation)}'
 }
 
 fn windows_content_height(children []Element) int {
@@ -890,10 +1054,15 @@ fn windows_update_element(key string, hwnd voidptr, el Element, y_offset int, cr
 	C.ui2_win_show(hwnd, windows_bool(!el.hidden))
 	C.ui2_win_enable(hwnd, windows_bool(el.enabled))
 	declared_changed := (st.node_declared_text[key] or { '' }) != el.text
+	// A held label draws with the control inside it; everything else draws with itself.
+	mut text_hwnd := hwnd
+	if el.kind == .label {
+		text_hwnd = C.ui2_win_label_text_hwnd(hwnd)
+	}
 	match el.kind {
 		.label, .button, .checkbox, .switch_control, .toggle_button {
-			if declared_changed || windows_native_text(hwnd) != el.text {
-				windows_set_native_text(hwnd, el.text)
+			if declared_changed || windows_native_text(text_hwnd) != el.text {
+				windows_set_native_text(text_hwnd, el.text)
 			}
 			if el.kind in [.checkbox, .switch_control, .toggle_button] {
 				C.ui2_win_set_checked(hwnd, windows_bool(el.checked))
@@ -948,15 +1117,18 @@ fn windows_update_element(key string, hwnd voidptr, el Element, y_offset int, cr
 		.view, .scroll, .screen {}
 	}
 	st.node_declared_text[key] = el.text
-	windows_update_style(key, hwnd, el)
-	windows_update_tooltip(key, hwnd, el.tooltip)
+	windows_update_style(key, text_hwnd, el)
+	// The tooltip goes on the outer window, which is the declared frame, and on the
+	// control inside it, which is what the pointer actually lands on.
+	windows_update_tooltip(key, hwnd, text_hwnd, el.tooltip)
 	if el.kind == .label {
 		C.ui2_win_invalidate_parent(hwnd)
+		C.ui2_win_invalidate(text_hwnd)
 	}
 	C.ui2_win_invalidate(hwnd)
 }
 
-fn windows_update_tooltip(key string, hwnd voidptr, tooltip string) {
+fn windows_update_tooltip(key string, hwnd voidptr, text_hwnd voidptr, tooltip string) {
 	mut st := windows_state()
 	if (st.tooltip_sigs[key] or { '' }) == tooltip {
 		return
@@ -974,6 +1146,11 @@ fn windows_update_tooltip(key string, hwnd voidptr, tooltip string) {
 	native_tooltip := C.ui2_win_create_tooltip(hwnd, wide_tooltip)
 	unsafe { free(wide_tooltip) }
 	if native_tooltip != unsafe { nil } {
+		if text_hwnd != hwnd {
+			// A held label's static covers the text, so the mouse moves over it and
+			// never over the holder the tooltip was put on. It is a target too.
+			C.ui2_win_tooltip_add_target(native_tooltip, text_hwnd)
+		}
 		st.tooltips[key] = native_tooltip
 		st.tooltip_sigs[key] = tooltip
 	}
@@ -1191,6 +1368,7 @@ fn windows_remove_stale(active map[string]bool) {
 		st.node_image_path.delete(key)
 		st.node_ids.delete(key)
 		st.node_boxes.delete(key)
+		st.node_label_boxed.delete(key)
 		st.node_text_styles.delete(key)
 		st.scroll_positions.delete(key)
 	}
@@ -1422,21 +1600,22 @@ fn ui2_windows_window_proc(hwnd voidptr, message u32, wparam usize, lparam isize
 			box := st.node_boxes[key] or { BoxStyle{} }
 			kind := st.node_kinds[key] or { Kind.view }
 			brush := st.brushes[key] or { voidptr(unsafe { nil }) }
-			return C.ui2_win_apply_control_colors(voidptr(wparam), style.color, box.bg, windows_bool(box.transparent || kind in [
-				.label,
-				.checkbox,
-			]), brush)
+			return C.ui2_win_apply_control_colors(voidptr(wparam), style.color, box.bg,
+				windows_bool(windows_draws_no_background(kind, box)), brush)
 		}
 		win_wm_paint_background {
-			box := if hwnd == st.root {
-				st.node_boxes[''] or { BoxStyle{} }
+			mut box := BoxStyle{}
+			mut kind := Kind.screen
+			if hwnd == st.root {
+				box = st.node_boxes[''] or { BoxStyle{} }
 			} else {
 				key := st.handle_keys[windows_handle_id(hwnd)] or { return 0 }
-				st.node_boxes[key] or { return 0 }
+				box = st.node_boxes[key] or { return 0 }
+				kind = st.node_kinds[key] or { Kind.screen }
 			}
 			C.ui2_win_paint_background_into(hwnd, voidptr(wparam), box.bg, box.radius,
-				windows_bool(box.transparent), box.border_color, box.border_left,
-				box.border_top, box.border_right, box.border_bottom)
+				windows_bool(windows_draws_no_background(kind, box)), box.border_color,
+				box.border_left, box.border_top, box.border_right, box.border_bottom)
 			return 0
 		}
 		win_wm_paint {
@@ -1451,9 +1630,10 @@ fn ui2_windows_window_proc(hwnd voidptr, message u32, wparam usize, lparam isize
 				return C.ui2_win_default_proc(hwnd, message, wparam, lparam)
 			}
 			kind := st.node_kinds[key] or { Kind.screen }
-			if kind == .view || kind == .scroll {
+			if kind == .view || kind == .scroll || windows_is_label_container(key, hwnd) {
 				box := st.node_boxes[key] or { BoxStyle{} }
-				C.ui2_win_paint_background(hwnd, box.bg, box.radius, windows_bool(box.transparent),
+				transparent := windows_bool(windows_draws_no_background(kind, box))
+				C.ui2_win_paint_background(hwnd, box.bg, box.radius, transparent,
 					box.border_color, box.border_left, box.border_top, box.border_right,
 					box.border_bottom)
 				return 0
@@ -1465,7 +1645,7 @@ fn ui2_windows_window_proc(hwnd voidptr, message u32, wparam usize, lparam isize
 			}
 			key := st.handle_keys[windows_handle_id(hwnd)] or { '' }
 			kind := st.node_kinds[key] or { Kind.screen }
-			if kind == .view || kind == .scroll {
+			if kind == .view || kind == .scroll || windows_is_label_container(key, hwnd) {
 				return 1
 			}
 		}
@@ -1531,10 +1711,28 @@ fn ui2_windows_window_proc(hwnd voidptr, message u32, wparam usize, lparam isize
 	return C.ui2_win_default_proc(hwnd, message, wparam, lparam)
 }
 
+// A held label is the container covering the declared frame; the static inside it is
+// mapped to the same node so its colours can be found, but it is not what that node's
+// border belongs to — drawn there the border would close around the text rather than
+// around the label. Only the window a node actually is draws that node's border.
+fn windows_is_label_container(key string, hwnd voidptr) bool {
+	st := windows_state()
+	if (st.node_kinds[key] or { Kind.screen }) != .label {
+		return false
+	}
+	node := st.nodes[key] or { return false }
+	return node == hwnd && C.ui2_win_label_text_hwnd(hwnd) != hwnd
+}
+
 @[export: 'ui2_windows_control_border']
 fn ui2_windows_control_border(hwnd voidptr) {
 	st := windows_state()
 	key := st.handle_keys[windows_handle_id(hwnd)] or { return }
+	if node := st.nodes[key] {
+		if node != hwnd {
+			return
+		}
+	}
 	box := st.node_boxes[key] or { return }
 	C.ui2_win_paint_control_border(hwnd, box.border_color, box.radius, box.border_left,
 		box.border_top, box.border_right, box.border_bottom)

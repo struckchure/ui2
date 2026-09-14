@@ -25,6 +25,7 @@
 #include <commctrl.h>
 #include <shellapi.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <wchar.h>
 
 #define UI2_WM_REFRESH (WM_APP + 77)
@@ -355,10 +356,62 @@ static inline void ui2_win_set_window_title(void *hwnd, const wchar_t *title) {
 	if (hwnd != NULL) SetWindowTextW((HWND)hwnd, title == NULL ? L"" : title);
 }
 
+// SS_NOPREFIX because a label's text is text. Without it a static reads an ampersand
+// as the marker before an accelerator key, swallowing it and underlining whatever
+// follows, and the measurement below — which counts the ampersand as the character it
+// is, as every other backend draws it — would wrap at a different width than the
+// control does and place the block at the wrong height.
 static inline DWORD ui2_win_label_style(int alignment) {
-	if (alignment == 1) return SS_CENTER | SS_CENTERIMAGE;
-	if (alignment == 2) return SS_RIGHT | SS_CENTERIMAGE;
-	return SS_LEFT | SS_CENTERIMAGE;
+	DWORD alignment_style = SS_LEFT;
+	if (alignment == 1) alignment_style = SS_CENTER;
+	if (alignment == 2) alignment_style = SS_RIGHT;
+	return alignment_style | SS_NOPREFIX;
+}
+
+// Height the control's own text needs, in the font the control is using.
+// SS_CENTERIMAGE centres a single line of static text and nothing more, so a label is
+// measured and moved rather than styled.
+//
+// One line is the font's own height, which the text metrics give straight away. Only
+// a label allowed to wrap is laid out to find where its lines broke, so a screenful
+// of ordinary labels does not pay for a layout each.
+static inline int ui2_win_label_content_height(void *hwnd_ptr, int width, int lines) {
+	HWND hwnd = (HWND)hwnd_ptr;
+	if (hwnd == NULL || width <= 0) return 0;
+	HDC hdc = GetDC(hwnd);
+	if (hdc == NULL) return 0;
+	HFONT font = (HFONT)SendMessageW(hwnd, WM_GETFONT, 0, 0);
+	HFONT previous = NULL;
+	if (font != NULL) previous = (HFONT)SelectObject(hdc, font);
+	int height = 0;
+	TEXTMETRICW metrics;
+	int line_height = GetTextMetricsW(hdc, &metrics) ? (int)metrics.tmHeight : 0;
+	if (lines > 1) {
+		int length = GetWindowTextLengthW(hwnd);
+		wchar_t *text = length > 0
+			? (wchar_t *)malloc((size_t)(length + 1) * sizeof(wchar_t))
+			: NULL;
+		if (text != NULL) {
+			GetWindowTextW(hwnd, text, length + 1);
+			RECT rc;
+			rc.left = 0;
+			rc.top = 0;
+			rc.right = width;
+			rc.bottom = 0;
+			DrawTextW(hdc, text, length, &rc, DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX);
+			height = (int)(rc.bottom - rc.top);
+			free(text);
+			// A static control shows as many lines as its rectangle holds, so text that
+			// wraps past the caller's budget must not stretch the rectangle to fit: the
+			// block is only ever as tall as the lines that were asked for.
+			if (line_height > 0 && height > line_height * lines) height = line_height * lines;
+		}
+	} else {
+		height = line_height;
+	}
+	if (previous != NULL) SelectObject(hdc, previous);
+	ReleaseDC(hwnd, hdc);
+	return height;
 }
 
 static inline DWORD ui2_win_edit_style(int alignment) {
@@ -578,6 +631,23 @@ typedef struct ui2_win_tooltip_binding {
 	wchar_t *text;
 } ui2_win_tooltip_binding;
 
+// Give a tooltip one more window to appear over. TTF_SUBCLASS has the tooltip watch
+// that window's own mouse messages, so a window the pointer can land on has to be a
+// target in its own right: a window with a child over it never sees the mouse there.
+static inline int ui2_win_tooltip_add_target(void *binding_ptr, void *target_ptr) {
+	ui2_win_tooltip_binding *binding = (ui2_win_tooltip_binding *)binding_ptr;
+	HWND target = (HWND)target_ptr;
+	if (binding == NULL || binding->tooltip == NULL || target == NULL) return 0;
+	TOOLINFOW tool;
+	ZeroMemory(&tool, sizeof(tool));
+	tool.cbSize = sizeof(tool);
+	tool.uFlags = TTF_IDISHWND | TTF_SUBCLASS;
+	tool.hwnd = GetAncestor(target, GA_ROOT);
+	tool.uId = (UINT_PTR)target;
+	tool.lpszText = binding->text;
+	return SendMessageW(binding->tooltip, TTM_ADDTOOLW, 0, (LPARAM)&tool) ? 1 : 0;
+}
+
 static inline void *ui2_win_create_tooltip(void *target_ptr, const wchar_t *text) {
 	HWND target = (HWND)target_ptr;
 	if (target == NULL || text == NULL || text[0] == 0) return NULL;
@@ -600,14 +670,7 @@ static inline void *ui2_win_create_tooltip(void *target_ptr, const wchar_t *text
 		HeapFree(GetProcessHeap(), 0, binding);
 		return NULL;
 	}
-	TOOLINFOW tool;
-	ZeroMemory(&tool, sizeof(tool));
-	tool.cbSize = sizeof(tool);
-	tool.uFlags = TTF_IDISHWND | TTF_SUBCLASS;
-	tool.hwnd = owner;
-	tool.uId = (UINT_PTR)target;
-	tool.lpszText = binding->text;
-	if (!SendMessageW(binding->tooltip, TTM_ADDTOOLW, 0, (LPARAM)&tool)) {
+	if (!ui2_win_tooltip_add_target(binding, target)) {
 		DestroyWindow(binding->tooltip);
 		HeapFree(GetProcessHeap(), 0, binding->text);
 		HeapFree(GetProcessHeap(), 0, binding);
@@ -1293,6 +1356,15 @@ static inline int ui2_win_set_scroll_position(void *hwnd_ptr, int position) {
 	SetScrollInfo(hwnd, SB_VERT, &info, TRUE);
 	GetScrollInfo(hwnd, SB_VERT, &info);
 	return info.nPos;
+}
+
+// The static control a label draws with: the child of the view holding it, or the
+// control itself when the label is not held in one.
+static inline void *ui2_win_label_text_hwnd(void *hwnd_ptr) {
+	HWND hwnd = (HWND)hwnd_ptr;
+	if (hwnd == NULL) return NULL;
+	HWND child = GetWindow(hwnd, GW_CHILD);
+	return child != NULL ? (void *)child : (void *)hwnd;
 }
 
 static inline void ui2_win_capture_mouse(void *hwnd) {

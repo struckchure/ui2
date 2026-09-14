@@ -30,6 +30,15 @@ pub enum Align {
 	right
 }
 
+// Where a label's text sits in a frame taller than the text itself. Both backends
+// draw from the top by default, which is what a label sized to its own text wants;
+// a label given a box — a table cell, a caption panel — usually wants otherwise.
+pub enum VAlign {
+	top
+	middle
+	bottom
+}
+
 pub enum Kind {
 	screen
 	view
@@ -76,6 +85,7 @@ pub:
 	vertical_align     string
 	link               string
 	align              Align
+	valign             VAlign = .middle
 	head_indent        f64
 	first_line_indent  f64
 	hyphenation_factor f64
@@ -123,6 +133,22 @@ pub:
 // backed by BoxStyle gives transparent the same meaning.
 fn box_draws_fill(box BoxStyle) bool {
 	return !box.transparent
+}
+
+fn box_draws_border(box BoxStyle) bool {
+	return box.border_left > 0 || box.border_top > 0 || box.border_right > 0
+		|| box.border_bottom > 0
+}
+
+// Placing a label's text means sizing the control it draws with to the text, and that
+// control is then the wrong thing for anything measured against the label's declared
+// frame: a tooltip, a context menu, a border drawn round its edge. Such a label is put
+// inside a view covering the frame, which is what the backend holds and decorates,
+// while the text moves within it. A label with none of those stays the control itself,
+// because a view per label costs a third of a frame in a grid of them.
+fn label_needs_container(el Element) bool {
+	return el.kind == .label && (el.tooltip.len > 0 || el.menu.len > 0
+		|| box_draws_border(el.box))
 }
 
 // box_border_width keeps a declared border inside its element. Border widths

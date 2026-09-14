@@ -1673,7 +1673,8 @@ fn page_focused_text_area(direction int) {
 			.label {
 				x := el.frame.x + off_x
 				y := el.frame.y + off_y
-				draw_text(ctx, el.text, x, y, el.frame.width, el.frame.height, el.text_style)
+				draw_label_text(ctx, el.text, x, y, el.frame.width, el.frame.height, el.text_style,
+					clip)
 			}
 			.image {
 				x := el.frame.x + off_x
@@ -2661,16 +2662,36 @@ fn page_focused_text_area(direction int) {
 	}
 
 	// draw_text draws text that belongs to a box, shortening it when it does
-	// not fit.
+	// not fit. A control draws its text down the middle of the box whatever the
+	// style says, because a label is the only thing the native backends let
+	// place its text, and a style shared with one must not move a button.
 	fn draw_text(ctx &gg.Context, t string, x f64, y f64, w f64, h f64, style TextStyle) {
-		draw_text_in_box(ctx, t, x, y, w, h, style, true)
+		draw_text_in_box(ctx, t, x, y, w, h, centered_text_style(style), true, Rect{})
+	}
+
+	// draw_label_text draws a label, the one control whose style says where its
+	// text sits in a box with room to spare. It is drawn against the clip it was
+	// rendered under, so a block of lines too tall for the label stops at the
+	// label rather than running on over what comes after it.
+	fn draw_label_text(ctx &gg.Context, t string, x f64, y f64, w f64, h f64, style TextStyle, clip Rect) {
+		draw_text_in_box(ctx, t, x, y, w, h, style, true, clip)
 	}
 
 	// draw_editable_text draws the text of a field the caller can type in.
 	// Those controls place the caret by measuring the whole string, so a
 	// shortened line would leave the caret sitting past the end of it.
 	fn draw_editable_text(ctx &gg.Context, t string, x f64, y f64, w f64, h f64, style TextStyle) {
-		draw_text_in_box(ctx, t, x, y, w, h, style, false)
+		draw_text_in_box(ctx, t, x, y, w, h, centered_text_style(style), false, Rect{})
+	}
+
+	// A style that draws down the middle of its box. The caret and the selection
+	// of an editable field are measured from the middle, so its text has to be
+	// drawn there too.
+	fn centered_text_style(style TextStyle) TextStyle {
+		return TextStyle{
+			...style
+			valign: .middle
+		}
 	}
 
 	// draw_text_field_selection paints the selected rune range before its text.
@@ -2723,7 +2744,10 @@ fn page_focused_text_area(direction int) {
 		return runes[..from].string(), runes[from..to].string()
 	}
 
-	fn draw_text_in_box(ctx &gg.Context, t string, x f64, y f64, w f64, h f64, style TextStyle, fit bool) {
+	// clip is the region the caller is drawn under, and is what a block of text too
+	// tall for its box is held inside. An empty one is a caller that does not bound
+	// its text, which draws under whatever clip is already in force.
+	fn draw_text_in_box(ctx &gg.Context, t string, x f64, y f64, w f64, h f64, style TextStyle, fit bool, clip Rect) {
 		if t.len == 0 {
 			return
 		}
@@ -2732,8 +2756,6 @@ fn page_focused_text_area(direction int) {
 			.center { int(x + w / 2) }
 			.right { int(x + w) }
 		}
-
-		text_y := int(y + h / 2)
 		family := text_font_file(style.font_family, style.bold, style.italic)
 		ensure_family_fallbacks(ctx, family)
 		cfg := gg.TextCfg{
@@ -2745,21 +2767,40 @@ fn page_focused_text_area(direction int) {
 			align: text_align(style.align)
 			vertical_align: .middle
 		}
-		if style.lines > 1 {
-			parts := wrap_text_lines(ctx, t, w, style.lines, cfg)
-			line_h := font_line_height(style.size)
-			total_h := f64(parts.len) * line_h
-			start_y := y + (h - total_h) / 2 + line_h / 2
-			for i, part in parts {
-				if i >= style.lines {
-					break
-				}
-				line := if fit { fit_text(ctx, part, w, cfg) } else { part }
-				ctx.draw_text(int(text_x), int(start_y + f64(i) * line_h), line, cfg)
-			}
+		line_h := font_line_height(style.size)
+		parts := if style.lines > 1 {
+			wrap_text_lines(ctx, t, w, style.lines, cfg)
 		} else {
-			ctx.draw_text(text_x, text_y, if fit { fit_text(ctx, t, w, cfg) } else { t },
-				cfg)
+			[t]
+		}
+		block_h := f64(parts.len) * line_h
+		// A block with more lines than its box has room for is anchored at the top of
+		// the box and would run on out of the bottom of it, over whatever is drawn
+		// below. A native control draws only inside itself, so the lines that do not
+		// fit are cut off at the box rather than drawn past it.
+		bounded := block_h > h && clip.width > 0 && clip.height > 0
+		if bounded {
+			inside := intersect_rect(Rect{
+				x:      x
+				y:      y
+				width:  w
+				height: h
+			}, clip)
+			if inside.width <= 0 || inside.height <= 0 {
+				return
+			}
+			apply_clip(ctx, inside)
+		}
+		// The text block is as tall as the lines it ended up with, and valign says
+		// where that block sits in a frame with room to spare. draw_text is given the
+		// centre of each line because the config centres a line on its baseline box.
+		start_y := text_block_top(y, h, block_h, style.valign) + line_h / 2
+		for i, part in parts {
+			line := if fit { fit_text(ctx, part, w, cfg) } else { part }
+			ctx.draw_text(int(text_x), int(start_y + f64(i) * line_h), line, cfg)
+		}
+		if bounded {
+			apply_clip(ctx, clip)
 		}
 	}
 

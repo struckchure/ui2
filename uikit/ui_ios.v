@@ -63,9 +63,13 @@ __global g_long_press_handler = View(unsafe { nil })
 __global g_swipe_handler = View(unsafe { nil })
 __global g_views = map[string]View{}
 __global g_view_kinds = map[string]Kind{}
+// What a label's text was last laid out against, kept for the labels that can be
+// written to by id so setting their text can place it the way the layout would have.
+__global g_label_places = map[string]LabelPlacement{}
 __global g_nodes = map[string]View{}
 __global g_node_kinds = map[string]Kind{}
 __global g_node_gestures = map[string]string{}
+__global g_node_label_boxed = map[string]bool{}
 __global g_node_declared_text = map[string]string{}
 __global g_action_ids = map[u64]string{}
 __global g_text_change_ids = map[u64]string{}
@@ -130,6 +134,8 @@ pub fn text(id string) string {
 	kind := g_view_kinds[id] or { Kind.view }
 	ns_text := if kind == .dropdown {
 		macos.msg_id(view, 'currentTitle')
+	} else if kind == .label {
+		macos.msg_id(label_text_view(view), 'text')
 	} else {
 		macos.msg_id(view, 'text')
 	}
@@ -142,6 +148,12 @@ pub fn set_text(id string, t string) {
 		kind := g_view_kinds[id] or { Kind.view }
 		if kind == .dropdown {
 			macos.msg_void2(view, 'setTitle:forState:', macos.nsstring(t), macos.Id(usize(0)))
+		} else if kind == .label {
+			lbl := label_text_view(view)
+			macos.msg_void1(lbl, 'setText:', macos.nsstring(t))
+			if place := g_label_places[id] {
+				place_label_text(lbl, place.frame, place.lines, place.valign, place.boxed)
+			}
 		} else {
 			macos.msg_void1(view, 'setText:', macos.nsstring(t))
 		}
@@ -500,20 +512,123 @@ fn new_scroll_view(frame Rect, box BoxStyle) View {
 	return scroll
 }
 
-fn new_label_view(frame Rect, t string, text_hex u32, size f64, bold bool, align int, lines int) View {
-	lbl := macos.msg_id_rect(macos.alloc('UILabel'), 'initWithFrame:', native_rect(frame))
-	update_label_view(lbl, frame, t, text_hex, size, bold, align, lines)
-	return lbl
+fn new_label_view(frame Rect, t string, text_hex u32, size f64, bold bool, align int, lines int, valign VAlign, boxed bool) View {
+	inner := if boxed {
+		Rect{
+			width:  frame.width
+			height: frame.height
+		}
+	} else {
+		frame
+	}
+	lbl := macos.msg_id_rect(macos.alloc('UILabel'), 'initWithFrame:', native_rect(inner))
+	if !boxed {
+		update_label_view(lbl, frame, t, text_hex, size, bold, align, lines, valign, boxed)
+		return lbl
+	}
+	container := macos.msg_id_rect(macos.alloc('UIView'), 'initWithFrame:', native_rect(frame))
+	macos.msg_void1(container, 'addSubview:', lbl)
+	macos.release(lbl)
+	update_label_view(container, frame, t, text_hex, size, bold, align, lines, valign,
+		boxed)
+	return container
 }
 
-fn update_label_view(lbl View, frame Rect, t string, text_hex u32, size f64, bold bool, align int, lines int) {
-	macos.msg_void_rect(lbl, 'setFrame:', native_rect(frame))
+struct LabelPlacement {
+	frame  Rect
+	lines  int
+	valign VAlign
+	boxed  bool
+}
+
+// The label a view draws its text with: itself, or the one it holds.
+fn label_text_view(view View) View {
+	subviews := macos.msg_id(view, 'subviews')
+	if subviews == macos.Id(unsafe { nil }) || macos.msg_u64(subviews, 'count') == 0 {
+		return view
+	}
+	return View(macos.msg_id_u64(subviews, 'objectAtIndex:', 0))
+}
+
+fn update_label_view(view View, frame Rect, t string, text_hex u32, size f64, bold bool, align int, lines int, valign VAlign, boxed bool) {
+	macos.msg_void_rect(view, 'setFrame:', native_rect(frame))
+	lbl := if boxed { label_text_view(view) } else { view }
 	macos.msg_void1(lbl, 'setText:', macos.nsstring(t))
 	macos.msg_void1(lbl, 'setTextColor:', ios.color(text_hex))
 	macos.msg_void1(lbl, 'setFont:', font(size, bold))
 	macos.msg_void_i64(lbl, 'setTextAlignment:', i64(align))
-	macos.msg_void_i64(lbl, 'setNumberOfLines:', i64(lines))
-	macos.msg_void_i64(lbl, 'setLineBreakMode:', 4)
+	budget := label_line_budget(lines)
+	macos.msg_void_i64(lbl, 'setNumberOfLines:', i64(budget))
+	// A label allowed more than one line has to be allowed to wrap onto them; left
+	// truncating, asking for more lines only clips one line instead of filling them.
+	macos.msg_void_i64(lbl, 'setLineBreakMode:', if budget == 1 {
+		ns_line_break_by_truncating_tail
+	} else {
+		ns_line_break_by_word_wrapping
+	})
+	place_label_text(lbl, frame, budget, valign, boxed)
+}
+
+// What a label is really allowed to draw. UIKit reads a budget of no lines at all as
+// no limit, so a label asked for none would fill its frame with lines nobody asked
+// for, and be measured for its placement from all of them. Every backend makes a
+// budget of one line or less a single truncated line; this is where UIKit does.
+fn label_line_budget(lines int) int {
+	return if lines > 1 { lines } else { 1 }
+}
+
+// Put the label back over the whole area it was laid out with, then move it to where
+// this text wants to sit. Going back first is what lets changed text be measured
+// against the label's real width and given all the room the label has, rather than
+// the strip the text before it happened to need.
+fn place_label_text(lbl View, frame Rect, lines int, valign VAlign, boxed bool) {
+	macos.msg_void_rect(lbl, 'setFrame:', native_rect(if boxed {
+		Rect{
+			width:  frame.width
+			height: frame.height
+		}
+	} else {
+		frame
+	}))
+	apply_label_valign(lbl, frame, label_line_budget(lines), valign, boxed)
+}
+
+// NSLineBreakMode values, shared with UILabel.
+const ns_line_break_by_word_wrapping = 0
+const ns_line_break_by_truncating_tail = 4
+
+// A UILabel centres its text in its frame, so middle is already what it does. Top and
+// bottom shrink the label to the height its text actually wants and put that where it
+// was asked for; a wrapping label is measured against the width it has to break on.
+fn apply_label_valign(lbl View, frame Rect, lines int, valign VAlign, boxed bool) {
+	if valign == .middle || frame.height <= 0 {
+		return
+	}
+	if lines > 1 {
+		macos.msg_void_f64(lbl, 'setPreferredMaxLayoutWidth:', frame.width)
+	}
+	// Point carries a Cocoa size as well as a point; y is the height.
+	content := macos.msg_point(lbl, 'intrinsicContentSize').y
+	if content <= 0 || content >= frame.height {
+		return
+	}
+	offset := if valign == .top { 0.0 } else { frame.height - content }
+	// Inside the holding view when there is one, so that view keeps the declared frame
+	// and the border drawn round it stays round the label rather than round the text.
+	macos.msg_void_rect(lbl, 'setFrame:', native_rect(if boxed {
+		Rect{
+			y:      offset
+			width:  frame.width
+			height: content
+		}
+	} else {
+		Rect{
+			x:      frame.x
+			y:      frame.y + offset
+			width:  frame.width
+			height: content
+		}
+	}))
 }
 
 fn new_image_view(frame Rect, path string, rotation f64) View {
@@ -814,6 +929,7 @@ fn render_root(declared Element) {
 	remember_scroll_offsets()
 	g_views = map[string]View{}
 	g_view_kinds = map[string]Kind{}
+	g_label_places = map[string]LabelPlacement{}
 	g_action_ids = map[u64]string{}
 	g_text_change_ids = map[u64]string{}
 	g_text_submit_ids = map[u64]string{}
@@ -876,7 +992,7 @@ fn native_create_element(el Element) View {
 		.view { new_native_view(el.frame, el.box) }
 		.scroll { new_scroll_view(el.frame, el.box) }
 		.label {
-			new_label_view(el.frame, el.text, el.text_style.color, el.text_style.size, el.text_style.bold, align_value(el.text_style.align), el.text_style.lines)
+			new_label_view(el.frame, el.text, el.text_style.color, el.text_style.size, el.text_style.bold, align_value(el.text_style.align), el.text_style.lines, el.text_style.valign, label_needs_container(el))
 		}
 		.image { new_image_view(el.frame, el.image_path, el.rotation) }
 		.button {
@@ -910,7 +1026,7 @@ fn native_update_element(native View, el Element, declared_text_changed bool) {
 			set_corner_radius(native, el.box.radius)
 		}
 		.label {
-			update_label_view(native, el.frame, el.text, el.text_style.color, el.text_style.size, el.text_style.bold, align_value(el.text_style.align), el.text_style.lines)
+			update_label_view(native, el.frame, el.text, el.text_style.color, el.text_style.size, el.text_style.bold, align_value(el.text_style.align), el.text_style.lines, el.text_style.valign, label_needs_container(el))
 		}
 		.image { update_image_view(native, el.frame, el.image_path, el.rotation) }
 		.button {
@@ -961,6 +1077,7 @@ fn forget_descendant_nodes(key string) {
 		g_nodes.delete(child_key_)
 		g_node_kinds.delete(child_key_)
 		g_node_gestures.delete(child_key_)
+		g_node_label_boxed.delete(child_key_)
 		g_node_declared_text.delete(child_key_)
 	}
 }
@@ -1059,7 +1176,13 @@ fn render_element(parent View, el Element, key string, mut active map[string]boo
 	new_gestures := gesture_signature(el)
 	gesture_changed := existing_kind == el.kind && el.kind in [.view, .button]
 		&& old_gestures != new_gestures
+	// Whether a label is held in a view is decided when it is made, so gaining or
+	// losing a border, a tooltip or a menu has to make it again. Reusing it would
+	// leave the backend sending setText: to a plain view, which it cannot answer.
+	label_boxed_changed := el.kind == .label && existing_kind == .label
+		&& (g_node_label_boxed[key] or { false }) != label_needs_container(el)
 	created := native == unsafe { nil } || existing_kind != el.kind || gesture_changed
+		|| label_boxed_changed
 	declared_text_changed := key !in g_node_declared_text || (g_node_declared_text[key] or { '' }) != el.text
 	if created {
 		old_native := native
@@ -1069,6 +1192,7 @@ fn render_element(parent View, el Element, key string, mut active map[string]boo
 		g_nodes[key] = native
 		g_node_kinds[key] = el.kind
 		g_node_gestures[key] = new_gestures
+		g_node_label_boxed[key] = label_needs_container(el)
 		macos.msg_void1(parent, 'addSubview:', native)
 		if can_reparent {
 			reparent_direct_children(key, native)
@@ -1121,6 +1245,14 @@ fn render_element(parent View, el Element, key string, mut active map[string]boo
 	if el.id.len > 0 {
 		remember(el.id, native)
 		g_view_kinds[el.id] = el.kind
+		if el.kind == .label {
+			g_label_places[el.id] = LabelPlacement{
+				frame:  el.frame
+				lines:  el.text_style.lines
+				valign: el.text_style.valign
+				boxed:  label_needs_container(el)
+			}
+		}
 	}
 	g_node_declared_text[key] = el.text
 	return native
@@ -1154,6 +1286,7 @@ fn remove_stale_nodes(active map[string]bool) {
 		g_nodes.delete(key)
 		g_node_kinds.delete(key)
 		g_node_gestures.delete(key)
+		g_node_label_boxed.delete(key)
 		g_node_declared_text.delete(key)
 	}
 }

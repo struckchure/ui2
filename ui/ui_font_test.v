@@ -478,3 +478,26 @@ fn test_wrap_text_lines_keeps_a_word_wider_than_the_line_whole() {
 		'verylongunbreakableword',
 	]
 }
+
+fn test_text_block_top_places_the_block_in_the_frame() {
+	// A 30-tall block in a 100-tall frame starting at 10.
+	assert text_block_top(10, 100, 30, .top) == 10
+	assert text_block_top(10, 100, 30, .middle) == 45
+	assert text_block_top(10, 100, 30, .bottom) == 80
+}
+
+fn test_text_block_top_starts_at_the_top_when_there_is_no_room() {
+	// Text taller than its frame is shown from its beginning whatever was asked for,
+	// so what gets cut off is the end rather than both ends.
+	assert text_block_top(10, 20, 20, .middle) == 10
+	assert text_block_top(10, 20, 50, .middle) == 10
+	assert text_block_top(10, 20, 50, .bottom) == 10
+}
+
+fn test_text_block_top_defaults_to_a_centred_label() {
+	// TextStyle.valign defaults to middle, which is where two of the three backends
+	// already drew a label, so the default keeps their rendering as it was.
+	style := TextStyle{}
+	assert style.valign == .middle
+	assert text_block_top(0, 100, 20, style.valign) == 40
+}
