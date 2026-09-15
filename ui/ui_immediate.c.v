@@ -2405,7 +2405,14 @@ fn page_focused_text_area(direction int) {
 			return true
 		}
 		mut image_ctx := g_gg_app.ctx
-		loaded_image := image_ctx.create_image(path) or {
+		// `create_image` keeps an uninitialized copy in gg's post-startup image
+		// cache on the Linux renderer. Loading from bytes uses the initialized
+		// cache path, so raster images added after startup are drawable too.
+		image_bytes := os.read_bytes(path) or {
+			eprintln('ui2: could not read image `${path}`: ${err}')
+			return false
+		}
+		loaded_image := image_ctx.create_image_from_byte_array(image_bytes, gg.ImageConfig{}) or {
 			eprintln('ui2: could not load image `${path}`: ${err}')
 			return false
 		}
