@@ -1,0 +1,18 @@
+MenuBar {
+    Menu {
+        title: "File"
+        MenuItem { id: file_new text: "New" shortcut: "cmd+n" }
+        MenuItem { text: "Open" on_tap: file_open shortcut: "cmd+o" }
+        MenuSeparator {}
+        MenuItem { id: file_revert text: "Revert" enabled: false }
+        Menu {
+            title: "Export"
+            MenuItem { id: export_pdf text: "PDF" }
+            MenuItem { id: export_png text: "PNG" }
+        }
+    }
+    Menu {
+        title: "View"
+        MenuItem { id: word_wrap text: "Word Wrap" checked: true }
+    }
+}
