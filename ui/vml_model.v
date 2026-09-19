@@ -79,6 +79,8 @@ fn v_value_from[T](value T) VValue {
 			items << v_value_from(item)
 		}
 		return v_list(items)
+	} $else $if T is $interface {
+		return v_interface_value(value)
 	} $else $if T is $struct {
 		mut fields := map[string]VValue{}
 		$for field in T.fields {
@@ -119,6 +121,8 @@ fn v_schema_from[T](value T) VSchema {
 			kind:    .list
 			element: &element
 		}
+	} $else $if T is $interface {
+		return v_interface_schema(value)
 	} $else $if T is $struct {
 		mut fields := map[string]VSchema{}
 		$for field in T.fields {
