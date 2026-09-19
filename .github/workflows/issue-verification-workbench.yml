@@ -1,16 +1,12 @@
 name: Isolated issue verification workbench
-
 on:
   push:
     branches: ['workbench/ui2-issues-20260919']
-
 permissions:
   contents: write
-
 concurrency:
-  group: ui2-issue-fix-publishing
+  group: ui2-issue-fix-publishing-slim
   cancel-in-progress: true
-
 jobs:
   verify-and-publish:
     runs-on: ubuntu-slim
