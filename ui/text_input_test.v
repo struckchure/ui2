@@ -55,3 +55,20 @@ fn test_text_input_rejects_multiline_password_mode() {
 		assert err.msg().contains('single-line')
 	}
 }
+
+fn test_single_line_content_viewport_respects_padding_and_parent_clip() {
+	content := text_field_content_rect(rect(20, 30, 100, 36), 12)
+	assert content == rect(32, 32, 80, 32)
+	assert intersect_rect(content, rect(40, 40, 200, 100)) == rect(40, 40, 72, 24)
+	assert intersect_rect(content, rect(0, 0, 10, 10)).width == 0
+	assert text_field_content_rect(rect(20, 30, 100, 36), -5) == rect(20, 32, 92, 32)
+}
+
+fn test_single_line_content_viewport_clamps_empty_and_tiny_controls() {
+	for frame in [rect(0, 0, 0, 0), rect(0, 0, 10, 3), rect(0, 0, -10, -10)] {
+		content := text_field_content_rect(frame, 12)
+		assert content.width == 0
+		assert content.height == 0
+	}
+	assert text_field_content_rect(rect(0, 0, 20, 36), 30).width == 0
+}

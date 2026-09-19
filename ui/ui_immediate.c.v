@@ -1925,29 +1925,37 @@ fn page_focused_text_area(direction int) {
 				is_focused := g_focused_field == el.id
 				draw_control_surface(ctx, x, y, el.frame.width, el.frame.height, el.box,
 					is_focused, el.enabled)
-				if is_focused && !editor.selection.collapsed() {
-					draw_text_field_selection(ctx, display_text, editor.selection, x + padding_left,
-						y, content_width, el.frame.height, el.text_style)
-				}
-				if current_text.len > 0 {
-					draw_editable_text(ctx, display_text, x + padding_left, y, content_width, el.frame.height, el.text_style)
-				} else if el.placeholder.len > 0 {
-					placeholder_style := TextStyle{
-						...el.text_style
-						color: 0x999999
+				// Editable text is not ellipsized: keep its full value for caret and
+				// selection measurement, but paint only inside the input's viewport.
+				content_clip := intersect_rect(text_field_content_rect(rect(x, y,
+					el.frame.width, el.frame.height), padding_left), clip)
+				if content_clip.width > 0 && content_clip.height > 0 {
+					apply_clip(ctx, content_clip)
+					if is_focused && !editor.selection.collapsed() {
+						draw_text_field_selection(ctx, display_text, editor.selection, x + padding_left,
+							y, content_width, el.frame.height, el.text_style)
 					}
-					draw_editable_text(ctx, el.placeholder, x + padding_left, y, content_width, el.frame.height, placeholder_style)
-				}
-				if is_focused {
-					before := editor.text.runes()[..editor.selection.caret].string()
-					caret_text := text_field_display_text(before, el.secure)
-					text_w := f64(ctx.text_width(caret_text))
-					text_origin := text_field_aligned_text_origin(x + padding_left, content_width,
-						f64(ctx.text_width(display_text)), el.text_style.align)
-					cursor_x := text_origin + text_w
-					cursor_y := y + el.frame.height * 0.2
-					cursor_h := el.frame.height * 0.6
-					draw_rect(ctx, cursor_x, cursor_y, 2, cursor_h, el.text_style.color, 0)
+					if current_text.len > 0 {
+						draw_editable_text(ctx, display_text, x + padding_left, y, content_width, el.frame.height, el.text_style)
+					} else if el.placeholder.len > 0 {
+						placeholder_style := TextStyle{
+							...el.text_style
+							color: 0x999999
+						}
+						draw_editable_text(ctx, el.placeholder, x + padding_left, y, content_width, el.frame.height, placeholder_style)
+					}
+					if is_focused {
+						before := editor.text.runes()[..editor.selection.caret].string()
+						caret_text := text_field_display_text(before, el.secure)
+						text_w := f64(ctx.text_width(caret_text))
+						text_origin := text_field_aligned_text_origin(x + padding_left, content_width,
+							f64(ctx.text_width(display_text)), el.text_style.align)
+						cursor_x := text_origin + text_w
+						cursor_y := y + el.frame.height * 0.2
+						cursor_h := el.frame.height * 0.6
+						draw_rect(ctx, cursor_x, cursor_y, 2, cursor_h, el.text_style.color, 0)
+					}
+					apply_clip(ctx, clip)
 				}
 				if el.enabled && !el.readonly {
 					add_hit_target(HitTarget{

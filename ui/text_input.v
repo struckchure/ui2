@@ -63,3 +63,15 @@ pub fn text_input(config TextInputConfig) !Element {
 	}
 	return field
 }
+
+// text_field_content_rect is the immediate renderer's single-line viewport.
+// Keep a small vertical inset for the focus border and clamp narrow controls
+// rather than passing negative sizes to the graphics backend.
+fn text_field_content_rect(frame Rect, padding_left f64) Rect {
+	left := if padding_left > 0 { padding_left } else { 0.0 }
+	return rect(frame.x + left, frame.y + 2, if frame.width > left + 8 {
+		frame.width - left - 8
+	} else {
+		0.0
+	}, if frame.height > 4 { frame.height - 4 } else { 0.0 })
+}
