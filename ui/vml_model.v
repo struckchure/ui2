@@ -64,8 +64,18 @@ fn v_list(items []VValue) VValue {
 	}
 }
 
-fn v_value_from[T](value T) VValue {
-	$if T is string {
+fn v_value_from_tracked[T](value T, ancestors []voidptr) VValue {
+	$if T.unaliased_typ is voidptr {
+		return VValue{}
+	} $else $if T is $pointer {
+		address := unsafe { voidptr(value) }
+		if isnil(value) || address in ancestors {
+			return VValue{}
+		}
+		mut next := ancestors.clone()
+		next << address
+		return v_value_from_pointee(value, next)
+	} $else $if T is string {
 		return v_string(value)
 	} $else $if T is bool {
 		return v_bool(value)
@@ -76,7 +86,7 @@ fn v_value_from[T](value T) VValue {
 	} $else $if T is $array {
 		mut items := []VValue{cap: value.len}
 		for item in value {
-			items << v_value_from(item)
+			items << v_value_from_tracked(item, ancestors)
 		}
 		return v_list(items)
 	} $else $if T is $interface {
@@ -85,7 +95,7 @@ fn v_value_from[T](value T) VValue {
 		mut fields := map[string]VValue{}
 		$for field in T.fields {
 			$if field.is_pub {
-				fields[field.name] = v_value_from(value.$(field.name))
+				fields[field.name] = v_value_from_tracked(value.$(field.name), ancestors)
 			}
 		}
 		return v_object(fields)
@@ -94,16 +104,36 @@ fn v_value_from[T](value T) VValue {
 	}
 }
 
-fn v_array_element_schema[E](_ []E) VSchema {
+fn v_array_element_schema[E](_ []E, ancestors []voidptr, nil_types []string) VSchema {
 	$if E is $struct {
-		return v_schema_from(E{})
+		return v_schema_from_tracked[E](E{}, ancestors, nil_types)
 	} $else {
-		return v_schema_from($zero(E))
+		return v_schema_from_tracked[E]($zero(E), ancestors, nil_types)
 	}
 }
 
-fn v_schema_from[T](value T) VSchema {
-	$if T is string {
+fn v_schema_from_tracked[T](value T, ancestors []voidptr, nil_types []string) VSchema {
+	$if T.unaliased_typ is voidptr {
+		return VSchema{}
+	} $else $if T is $pointer {
+		if isnil(value) {
+			// Empty arrays and nil references still expose their declared type.
+			// Stop a recursive nil type instead of expanding it indefinitely.
+			if T.name in nil_types {
+				return VSchema{}
+			}
+			mut next_types := nil_types.clone()
+			next_types << T.name
+			return v_schema_from_nil_pointee(value, ancestors, next_types)
+		}
+		address := unsafe { voidptr(value) }
+		if address in ancestors {
+			return VSchema{}
+		}
+		mut next := ancestors.clone()
+		next << address
+		return v_schema_from_pointee(value, next, nil_types)
+	} $else $if T is string {
 		return VSchema{
 			kind: .string_
 		}
@@ -116,7 +146,7 @@ fn v_schema_from[T](value T) VSchema {
 			kind: .number
 		}
 	} $else $if T is $array {
-		element := v_array_element_schema(value)
+		element := v_array_element_schema(value, ancestors, nil_types)
 		return VSchema{
 			kind:    .list
 			element: &element
@@ -127,7 +157,7 @@ fn v_schema_from[T](value T) VSchema {
 		mut fields := map[string]VSchema{}
 		$for field in T.fields {
 			$if field.is_pub {
-				fields[field.name] = v_schema_from(value.$(field.name))
+				fields[field.name] = v_schema_from_tracked(value.$(field.name), ancestors, nil_types)
 			}
 		}
 		return VSchema{
