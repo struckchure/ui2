@@ -48,6 +48,9 @@ $if (android || linux || ((macos || windows) && ui2_custom_rendering ?)) && !ui2
 
 	struct TouchState {
 	mut:
+		// A rebuild can move a dragged view away from the initial press.
+		// Keep its event identity until release instead of hit-testing it again.
+		pointer_target     HitTarget
 		down               bool
 		start_x            f64
 		start_y            f64
@@ -635,6 +638,10 @@ $if (android || linux || ((macos || windows) && ui2_custom_rendering ?)) && !ui2
 				handle_touch_down(f64(e.mouse_x), f64(e.mouse_y))
 			}
 			.mouse_move {
+				if g_touch.down && g_touch.pointer_target.action_id.len > 0 {
+					handle_touch_move(f64(e.mouse_x), f64(e.mouse_y))
+					return
+				}
 				if menu_bar_handle_move(f64(e.mouse_x), f64(e.mouse_y)) {
 					return
 				}
@@ -652,6 +659,10 @@ $if (android || linux || ((macos || windows) && ui2_custom_rendering ?)) && !ui2
 				handle_mouse_scroll(f64(e.mouse_x), f64(e.mouse_y), f64(e.scroll_y))
 			}
 			.mouse_up {
+				if g_touch.down && g_touch.pointer_target.action_id.len > 0 {
+					handle_touch_up(f64(e.mouse_x), f64(e.mouse_y))
+					return
+				}
 				if menu_bar_handle_up(f64(e.mouse_x), f64(e.mouse_y)) {
 					return
 				}
@@ -673,6 +684,9 @@ $if (android || linux || ((macos || windows) && ui2_custom_rendering ?)) && !ui2
 				} else {
 					handle_touch_up(g_touch.current_x, g_touch.current_y)
 				}
+			}
+			.touches_cancelled, .unfocused, .suspended {
+				cancel_touch()
 			}
 			.char {
 				handle_char_input(e.char_code)
@@ -732,6 +746,7 @@ $if (android || linux || ((macos || windows) && ui2_custom_rendering ?)) && !ui2
 			return
 		}
 		if target.action_id.len > 0 && (target.clickable || target.draggable) {
+			g_touch.pointer_target = target
 			fire_event(pointer_event_id('down', target.action_id, x, y))
 		}
 	}
@@ -748,7 +763,11 @@ $if (android || linux || ((macos || windows) && ui2_custom_rendering ?)) && !ui2
 		}
 		g_touch.current_x = x
 		g_touch.current_y = y
-		target := hit_test(g_touch.start_x, g_touch.start_y)
+		target := if g_touch.pointer_target.action_id.len > 0 {
+			g_touch.pointer_target
+		} else {
+			hit_test(g_touch.start_x, g_touch.start_y)
+		}
 		if target.slider {
 			commit_slider(target, x, y)
 			return
@@ -802,8 +821,14 @@ $if (android || linux || ((macos || windows) && ui2_custom_rendering ?)) && !ui2
 		if !g_touch.down {
 			return
 		}
+		captured := g_touch.pointer_target
+		g_touch.pointer_target = HitTarget{}
 		g_touch.down = false
-		slider_target := hit_test(g_touch.start_x, g_touch.start_y)
+		slider_target := if captured.action_id.len > 0 {
+			captured
+		} else {
+			hit_test(g_touch.start_x, g_touch.start_y)
+		}
 		if slider_target.slider {
 			commit_slider(slider_target, x, y)
 			return
@@ -824,11 +849,15 @@ $if (android || linux || ((macos || windows) && ui2_custom_rendering ?)) && !ui2
 		if g_touch.long_press_fired || g_touch.scrollbar_drag {
 			return
 		}
-		if g_open_dropdown.len > 0 {
+		if g_open_dropdown.len > 0 && captured.action_id.len == 0 {
 			handle_dropdown_release(x, y)
 			return
 		}
-		mut target := hit_test(g_touch.start_x, g_touch.start_y)
+		mut target := if captured.action_id.len > 0 {
+			captured
+		} else {
+			hit_test(g_touch.start_x, g_touch.start_y)
+		}
 		dx := x - g_touch.start_x
 		if g_touch.moved && dx < -72 {
 			if target.action_id.len > 0 && target.swipe_left {
@@ -881,6 +910,18 @@ $if (android || linux || ((macos || windows) && ui2_custom_rendering ?)) && !ui2
 			return
 		}
 		fire_event(target.action_id)
+	}
+
+	// Finish a captured gesture on focus loss/cancellation so an IDE drag cannot
+	// remain stuck. Ordinary taps are cancelled without activating a control.
+	fn cancel_touch() {
+		captured := g_touch.pointer_target
+		x := g_touch.current_x
+		y := g_touch.current_y
+		g_touch = TouchState{}
+		if captured.action_id.len > 0 {
+			fire_event(pointer_event_id('up', captured.action_id, x, y))
+		}
 	}
 
 	fn check_long_press() {
@@ -1684,7 +1725,7 @@ fn page_focused_text_area(direction int) {
 						retain_culled_scroll_state(child)
 						continue
 					}
-					render_element(ctx, child, x, y - scroll_y, child_clip, child_scroll_parent_id)
+					 render_element(ctx, child, x, y - scroll_y, child_clip, child_scroll_parent_id)
 				}
 				if child_clip.width > 0 && child_clip.height > 0 {
 					apply_clip(ctx, child_clip)
