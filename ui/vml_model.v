@@ -1034,8 +1034,8 @@ fn v_eval_node(node &VNode, incoming_scope map[string]VValue, frame Rect, mut ev
 			return error('an element can only have one two-way binding at line ${node.line}')
 		}
 		property := key.all_after('bind.')
-		if expr.kind != .path || !expr.value.starts_with('app.') || expr.value.count('.') != 1 {
-			return error('`${key}` must target a mutable top-level app field at line ${expr.line}')
+		if expr.kind != .path || !expr.value.starts_with('app.') {
+			return error('`${key}` must target a public mutable app field path at line ${expr.line}')
 		}
 		resolved.props[property] = v_eval(expr, scope)!.string_value()
 		if resolved.id.len == 0 {
@@ -1305,8 +1305,8 @@ fn v_validate_node_schema[T](node &VNode, incoming_scope map[string]VSchema) ! {
 		if property !in ['text', 'checked', 'active', 'pressed', 'value'] {
 			return error('two-way binding is not supported for `${property}` at line ${node.line}')
 		}
-		if expr.kind != .path || !expr.value.starts_with('app.') || expr.value.count('.') != 1 {
-			return error('`${key}` must target a mutable top-level app field at line ${expr.line}')
+		if expr.kind != .path || !expr.value.starts_with('app.') {
+			return error('`${key}` must target a public mutable app field path at line ${expr.line}')
 		}
 		v_schema_expression(expr, scope)!
 		target := expr.value.all_after('app.')
@@ -1415,18 +1415,7 @@ pub fn element_from_vml_model[T](source string, model T, frame Rect) !Element {
 }
 
 fn vml_writable_field_type[T](name string) !string {
-	$for field in T.fields {
-		if field.name == name {
-			$if !field.is_pub {
-				return error('app field `${name}` is not public')
-			} $else $if !field.is_mut {
-				return error('app field `${name}` is not mutable')
-			} $else {
-				return typeof(field).name
-			}
-		}
-	}
-	return error('unknown app field `${name}`')
+	return vml_writable_path_type($zero(T), name.split('.'), name)
 }
 
 fn type_check_action[T](name string, args []VSchema, line int) ! {
@@ -1458,33 +1447,7 @@ fn type_check_action[T](name string, args []VSchema, line int) ! {
 }
 
 fn vml_set_field[T](mut model T, name string, value VValue) ! {
-	$for field in T.fields {
-		if field.name == name {
-			$if !field.is_pub {
-				return error('app field `${name}` is not public')
-			} $else $if !field.is_mut {
-				return error('app field `${name}` is not mutable')
-			} $else $if field.typ is string {
-				model.$(field.name) = value.string_value()
-				return
-			} $else $if field.typ is bool {
-				model.$(field.name) = value.truthy()
-				return
-			} $else $if field.typ is int {
-				model.$(field.name) = int(value.numeric(0)!)
-				return
-			} $else $if field.typ is f64 {
-				model.$(field.name) = value.numeric(0)!
-				return
-			} $else $if field.typ is f32 {
-				model.$(field.name) = f32(value.numeric(0)!)
-				return
-			} $else {
-				return error('two-way binding does not support app field `${name}` of type `${typeof(field).name}`')
-			}
-		}
-	}
-	return error('unknown app field `${name}`')
+	vml_set_path(mut model, name.split('.'), name, value)!
 }
 
 fn vml_dispatch[T](mut model T, invocation VmlInvocation) ! {
