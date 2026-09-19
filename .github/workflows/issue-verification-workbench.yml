@@ -1,0 +1,35 @@
+name: Isolated issue verification workbench
+
+on:
+  push:
+    branches: ['workbench/ui2-issues-20260919']
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 8772f482db2670bae2a6dca7ebf7710c530b6f14
+          path: ui2
+          persist-credentials: false
+      - name: Prepare the documented V toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 3 --output "$RUNNER_TEMP/v.zip" \
+            https://github.com/vlang/v/releases/download/0.5.2/v_linux.zip
+          unzip -q "$RUNNER_TEMP/v.zip" -d "$RUNNER_TEMP"
+          "$RUNNER_TEMP/v/v" version
+          tar --exclude='ui2/.git' -czf "$RUNNER_TEMP/ui2-verification.tar.gz" \
+            -C "$GITHUB_WORKSPACE" ui2 \
+            -C "$RUNNER_TEMP" v/v v/vlib v/thirdparty v/cmd v/v.mod
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ui2-isolated-verification
+          path: ${{ runner.temp }}/ui2-verification.tar.gz
+          retention-days: 1
