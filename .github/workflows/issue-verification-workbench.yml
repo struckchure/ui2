@@ -5,31 +5,65 @@ on:
     branches: ['workbench/ui2-issues-20260919']
 
 permissions:
-  contents: read
+  contents: write
+
+concurrency:
+  group: ui2-issue-fix-publishing
+  cancel-in-progress: false
 
 jobs:
-  prepare:
+  verify-and-publish:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
+      - uses: actions/checkout@v4
+        with:
+          path: workbench
+          persist-credentials: false
       - uses: actions/checkout@v4
         with:
           ref: 8772f482db2670bae2a6dca7ebf7710c530b6f14
           path: ui2
-          persist-credentials: false
-      - name: Prepare the documented V toolchain
-        shell: bash
+      - name: Prepare V 0.5.2 and Linux dependencies
         run: |
           set -euo pipefail
-          curl --fail --location --retry 3 --output "$RUNNER_TEMP/v.zip" \
-            https://github.com/vlang/v/releases/download/0.5.2/v_linux.zip
+          curl --fail --location --retry 3 --output "$RUNNER_TEMP/v.zip" https://github.com/vlang/v/releases/download/0.5.2/v_linux.zip
           unzip -q "$RUNNER_TEMP/v.zip" -d "$RUNNER_TEMP"
-          "$RUNNER_TEMP/v/v" version
-          tar --exclude='ui2/.git' -czf "$RUNNER_TEMP/ui2-verification.tar.gz" \
-            -C "$GITHUB_WORKSPACE" ui2 \
-            -C "$RUNNER_TEMP" v/v v/vlib v/thirdparty v/cmd v/v.mod
+          echo "$RUNNER_TEMP/v" >> "$GITHUB_PATH"
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends libx11-dev libxcursor-dev libxi-dev libgl1-mesa-dev libasound2-dev
+          tar -czf "$RUNNER_TEMP/ui2-linux-headers.tar.gz" -C /usr/include GL EGL KHR X11 alsa
       - uses: actions/upload-artifact@v4
         with:
-          name: ui2-isolated-verification
-          path: ${{ runner.temp }}/ui2-verification.tar.gz
+          name: ui2-linux-headers
+          path: ${{ runner.temp }}/ui2-linux-headers.tar.gz
           retention-days: 1
+      - name: Verify and publish separate issue branches
+        working-directory: ui2
+        run: |
+          set -euo pipefail
+          v version
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          for issue in 33 27 26 25 24; do
+            patch="$GITHUB_WORKSPACE/workbench/issue-patches/$issue.patch"
+            test -f "$patch" || continue
+            branch="fix/issue-$issue-20260919"
+            if git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
+              echo "Already published $branch; leaving it untouched"
+              continue
+            fi
+            git switch --detach 8772f482db2670bae2a6dca7ebf7710c530b6f14
+            git apply --index "$patch"
+            git diff --cached --check
+            case "$issue" in
+              33) v test ui/text_input_test.v; v -check -shared .; message='fix: clip single-line input content to its viewport' ;;
+              27) v -d ui2_headless test ui/vml_nested_binding_test.v; v -d ui2_headless test ui/vml_model_test.v; message='fix: support two-way bindings to nested model fields' ;;
+              26) v -d ui2_headless test ui/vml_interface_repeater_test.v; v -d ui2_headless test ui/vml_model_test.v; message='fix: reflect interface fields in VML repeaters' ;;
+              25) v -d ui2_headless test ui/vml_pointer_model_test.v; v -d ui2_headless test ui/vml_model_test.v; message='fix: dereference typed pointers in VML models' ;;
+              24) v test ui/ui_pointer_capture_immediate_test.v; v test ui/ui_scroll_immediate_test.v; v -check ide; message='fix: retain pointer capture across immediate renderer rebuilds' ;;
+            esac
+            git commit -m "$message" -m "Fixes #$issue"
+            git push origin "HEAD:refs/heads/$branch"
+            echo "Published $branch at $(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
+          done

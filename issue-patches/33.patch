@@ -1,0 +1,109 @@
+diff --git a/ui/text_input.v b/ui/text_input.v
+index 70b74d6..e1baaf6 100644
+--- a/ui/text_input.v
++++ b/ui/text_input.v
+@@ -63,3 +63,15 @@ pub fn text_input(config TextInputConfig) !Element {
+ 	}
+ 	return field
+ }
++
++// text_field_content_rect is the immediate renderer's single-line viewport.
++// Keep a small vertical inset for the focus border and clamp narrow controls
++// rather than passing negative sizes to the graphics backend.
++fn text_field_content_rect(frame Rect, padding_left f64) Rect {
++	left := if padding_left > 0 { padding_left } else { 0.0 }
++	return rect(frame.x + left, frame.y + 2, if frame.width > left + 8 {
++		frame.width - left - 8
++	} else {
++		0.0
++	}, if frame.height > 4 { frame.height - 4 } else { 0.0 })
++}
+ diff --git a/ui/text_input_test.v b/ui/text_input_test.v
+index d3433ca..b67653d 100644
+--- a/ui/text_input_test.v
++++ b/ui/text_input_test.v
+@@ -55,3 +55,20 @@ fn test_text_input_rejects_multiline_password_mode() {
+ 		assert err.msg().contains('single-line')
+ 	}
+ }
++
++fn test_single_line_content_viewport_respects_padding_and_parent_clip() {
++	content := text_field_content_rect(rect(20, 30, 100, 36), 12)
++	assert content == rect(32, 32, 80, 32)
++	assert intersect_rect(content, rect(40, 40, 200, 100)) == rect(40, 40, 72, 24)
++	assert intersect_rect(content, rect(0, 0, 10, 10)).width == 0
++	assert text_field_content_rect(rect(20, 30, 100, 36), -5) == rect(20, 32, 92, 32)
++}
++
++fn test_single_line_content_viewport_clamps_empty_and_tiny_controls() {
++	for frame in [rect(0, 0, 0, 0), rect(0, 0, 10, 3), rect(0, 0, -10, -10)] {
++		content := text_field_content_rect(frame, 12)
++		assert content.width == 0
++		assert content.height == 0
++	}
++	assert text_field_content_rect(rect(0, 0, 20, 36), 30).width == 0
++}
+ diff --git a/ui/ui_immediate.c.v b/ui/ui_immediate.c.v
+index 9185290..0b5fe64 100644
+--- a/ui/ui_immediate.c.v
++++ b/ui/ui_immediate.c.v
+@@ -1925,29 +1925,37 @@ fn page_focused_text_area(direction int) {
+ 				is_focused := g_focused_field == el.id
+ 				draw_control_surface(ctx, x, y, el.frame.width, el.frame.height, el.box,
+ 					is_focused, el.enabled)
+-				if is_focused && !editor.selection.collapsed() {
+-					draw_text_field_selection(ctx, display_text, editor.selection, x + padding_left,
+-						y, content_width, el.frame.height, el.text_style)
+-				}
+-				if current_text.len > 0 {
+-					draw_editable_text(ctx, display_text, x + padding_left, y, content_width, el.frame.height, el.text_style)
+-				} else if el.placeholder.len > 0 {
+-					placeholder_style := TextStyle{
+-						...el.text_style
+-						color: 0x999999
++				// Editable text is not ellipsized: keep its full value for caret and
++				// selection measurement, but paint only inside the input's viewport.
++				content_clip := intersect_rect(text_field_content_rect(rect(x, y,
++					el.frame.width, el.frame.height), padding_left), clip)
++				if content_clip.width > 0 && content_clip.height > 0 {
++					apply_clip(ctx, content_clip)
++					if is_focused && !editor.selection.collapsed() {
++						draw_text_field_selection(ctx, display_text, editor.selection, x + padding_left,
++							y, content_width, el.frame.height, el.text_style)
+ 					}
+-					draw_editable_text(ctx, el.placeholder, x + padding_left, y, content_width, el.frame.height, placeholder_style)
+-				}
+-				if is_focused {
+-					before := editor.text.runes()[..editor.selection.caret].string()
+-					caret_text := text_field_display_text(before, el.secure)
+-					text_w := f64(ctx.text_width(caret_text))
+-					text_origin := text_field_aligned_text_origin(x + padding_left, content_width,
+-						f64(ctx.text_width(display_text)), el.text_style.align)
+-					cursor_x := text_origin + text_w
+-					cursor_y := y + el.frame.height * 0.2
+-					cursor_h := el.frame.height * 0.6
+-					draw_rect(ctx, cursor_x, cursor_y, 2, cursor_h, el.text_style.color, 0)
++					if current_text.len > 0 {
++						draw_editable_text(ctx, display_text, x + padding_left, y, content_width, el.frame.height, el.text_style)
++					} else if el.placeholder.len > 0 {
++						placeholder_style := TextStyle{
++							...el.text_style
++							color: 0x999999
++						}
++						draw_editable_text(ctx, el.placeholder, x + padding_left, y, content_width, el.frame.height, placeholder_style)
++					}
++					if is_focused {
++						before := editor.text.runes()[..editor.selection.caret].string()
++						caret_text := text_field_display_text(before, el.secure)
++						text_w := f64(ctx.text_width(caret_text))
++						text_origin := text_field_aligned_text_origin(x + padding_left, content_width,
++							f64(ctx.text_width(display_text)), el.text_style.align)
++						cursor_x := text_origin + text_w
++						cursor_y := y + el.frame.height * 0.2
++						cursor_h := el.frame.height * 0.6
++						draw_rect(ctx, cursor_x, cursor_y, 2, cursor_h, el.text_style.color, 0)
++					}
++					apply_clip(ctx, clip)
+ 				}
+ 				if el.enabled && !el.readonly {
+ 					add_hit_target(HitTarget{
