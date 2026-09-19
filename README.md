@@ -168,8 +168,10 @@ building rather than charging runtime VML for repeatedly parsing the file:
 ```
 
 Ordinary properties are one-way expressions. `bind.text` and `bind.checked`
-write control edits back to a public mutable top-level model field. Public model
-methods with no arguments, one `int`, or one `string` argument can be used as
+write control edits back to a public mutable model field, including nested struct
+paths such as `bind.text: app.profile.name`. Every field along the path must be
+public and mutable. Boolean and numeric bindings validate the leaf field type.
+Public model methods with no arguments, one `int`, or one `string` argument can be used as
 actions:
 
 ```vml
