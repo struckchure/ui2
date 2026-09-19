@@ -13,8 +13,8 @@ concurrency:
 
 jobs:
   verify-and-publish:
-    runs-on: ubuntu-22.04
-    timeout-minutes: 20
+    runs-on: ubuntu-slim
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
