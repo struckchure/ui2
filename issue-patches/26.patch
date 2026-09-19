@@ -1,0 +1,158 @@
+diff --git a/ui/vml_interface_repeater_test.v b/ui/vml_interface_repeater_test.v
+new file mode 100644
+index 0000000..fdf37d9
+--- /dev/null
++++ b/ui/vml_interface_repeater_test.v
+@@ -0,0 +1,96 @@
++module ui2
++
++pub interface RepeaterItemContract {
++	id    int
++	label string
++}
++
++pub struct RepeaterItemA {
++pub:
++	id    int
++	label string
++	extra string
++}
++
++pub struct RepeaterItemB {
++pub:
++	id    int
++	label string
++}
++
++pub struct InterfaceRepeaterApp {
++pub mut:
++	items    []RepeaterItemContract
++	selected int
++}
++
++pub fn (mut app InterfaceRepeaterApp) select(id int) {
++	app.selected = id
++}
++
++const interface_repeater_source = 'Column {
++	Repeater {
++		model: app.items
++		key: item.id
++		Button { text: item.label on_tap: app.select(item.id) }
++	}
++}'
++
++fn test_repeater_reads_interface_fields_and_dispatches_stable_item_actions() {
++	mut model := InterfaceRepeaterApp{
++		items: [RepeaterItemContract(RepeaterItemA{
++			id:    7
++			label: 'One'
++		}),
++			RepeaterItemContract(&RepeaterItemB{
++				id:    9
++				label: 'Two'
++			})]
++	}
++	template := parse_vml(interface_repeater_source) or { panic(err) }
++	v_validate_template(template, model) or { panic(err) }
++	resolved, events := v_evaluate_template(template, model, rect(0, 0, 240, 160)) or { panic(err) }
++	root := element_from_vnode(resolved, rect(0, 0, 240, 160)) or { panic(err) }
++	assert root.children.len == 2
++	assert root.children[0].text == 'One'
++	assert root.children[1].text == 'Two'
++	assert root.children[0].key == '7'
++	assert root.children[1].key == '9'
++	event := events[root.children[1].action_id] or { panic('missing event') }
++	invocation := event.invocation or { panic('missing action') }
++	vml_dispatch(mut model, invocation) or { panic(err) }
++	assert model.selected == 9
++	model.items.reverse_in_place()
++	reordered, _ := v_evaluate_template(template, model, rect(0, 0, 240, 160)) or { panic(err) }
++	assert reordered.children[0].prop('on_tap') == root.children[1].action_id
++}
++
++fn test_empty_interface_repeater_validates_without_dereferencing_an_item() {
++	root := element_from_vml_model(interface_repeater_source, InterfaceRepeaterApp{}, rect(0, 0,
++		240, 160)) or { panic(err) }
++	assert root.children.len == 0
++	for field in ['typo', 'extra'] {
++		bad := interface_repeater_source.replace('item.label', 'item.${field}')
++		if _ := element_from_vml_model(bad, InterfaceRepeaterApp{}, rect(0, 0, 240, 160)) {
++			assert false, 'fields outside the interface contract must be rejected'
++		} else {
++			assert err.msg().contains('item.${field}')
++		}
++	}
++}
++
++fn test_interface_repeater_rejects_duplicate_keys() {
++	model := InterfaceRepeaterApp{
++		items: [RepeaterItemContract(RepeaterItemA{
++			id: 7
++		}),
++			RepeaterItemContract(RepeaterItemB{
++				id: 7
++			})]
++	}
++	if _ := element_from_vml_model(interface_repeater_source, model, rect(0, 0, 240, 160)) {
++		assert false, 'duplicate interface keys must not be accepted'
++	} else {
++		assert err.msg().contains('duplicate Repeater key')
++	}
++}
+ diff --git a/ui/vml_interface_schema.v b/ui/vml_interface_schema.v
+new file mode 100644
+index 0000000..ab43512
+--- /dev/null
++++ b/ui/vml_interface_schema.v
+@@ -0,0 +1,28 @@
++module ui2
++
++// Interface fields are part of the declared contract, even when a Repeater's
++// collection is empty. Do not select fields from a zero interface: it has no
++// backing object. Construct each field's schema from its type instead.
++fn v_interface_schema[E](_ E) VSchema {
++	mut fields := map[string]VSchema{}
++	$for field in E.fields {
++		$if field.is_pub {
++			zero := $zero(field.typ)
++			fields[field.name] = v_schema_from(zero)
++		}
++	}
++	return VSchema{
++		kind:   .object
++		fields: fields
++	}
++}
++
++fn v_interface_value[E](value E) VValue {
++	mut fields := map[string]VValue{}
++	$for field in E.fields {
++		$if field.is_pub {
++			fields[field.name] = v_value_from(value.$(field.name))
++		}
++	}
++	return v_object(fields)
++}
+ diff --git a/ui/vml_model.v b/ui/vml_model.v
+index 95f3b4b..1dcad70 100644
+--- a/ui/vml_model.v
++++ b/ui/vml_model.v
+@@ -79,6 +79,8 @@ fn v_value_from[T](value T) VValue {
+ 			items << v_value_from(item)
+ 		}
+ 		return v_list(items)
++	} $else $if T is $interface {
++		return v_interface_value(value)
+ 	} $else $if T is $struct {
+ 		mut fields := map[string]VValue{}
+ 		$for field in T.fields {
+@@ -119,6 +121,8 @@ fn v_schema_from[T](value T) VSchema {
+ 			kind:    .list
+ 			element: &element
+ 		}
++	} $else $if T is $interface {
++		return v_interface_schema(value)
+ 	} $else $if T is $struct {
+ 		mut fields := map[string]VSchema{}
+ 		$for field in T.fields {

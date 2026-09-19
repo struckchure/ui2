@@ -1,0 +1,262 @@
+diff --git a/ui/vml_model.v b/ui/vml_model.v
+index 95f3b4b..bceae14 100644
+--- a/ui/vml_model.v
++++ b/ui/vml_model.v
+@@ -64,8 +64,18 @@ fn v_list(items []VValue) VValue {
+ 	}
+ }
+ 
+-fn v_value_from[T](value T) VValue {
+-	$if T is string {
++fn v_value_from_tracked[T](value T, ancestors []voidptr) VValue {
++	$if T.unaliased_typ is voidptr {
++		return VValue{}
++	} $else $if T is $pointer {
++		address := unsafe { voidptr(value) }
++		if isnil(value) || address in ancestors {
++			return VValue{}
++		}
++		mut next := ancestors.clone()
++		next << address
++		return v_value_from_pointee(value, next)
++	} $else $if T is string {
+ 		return v_string(value)
+ 	} $else $if T is bool {
+ 		return v_bool(value)
+@@ -76,14 +86,14 @@ fn v_value_from[T](value T) VValue {
+ 	} $else $if T is $array {
+ 		mut items := []VValue{cap: value.len}
+ 		for item in value {
+-			items << v_value_from(item)
++			items << v_value_from_tracked(item, ancestors)
+ 		}
+ 		return v_list(items)
+ 	} $else $if T is $struct {
+ 		mut fields := map[string]VValue{}
+ 		$for field in T.fields {
+ 			$if field.is_pub {
+-				fields[field.name] = v_value_from(value.$(field.name))
++				fields[field.name] = v_value_from_tracked(value.$(field.name), ancestors)
+ 			}
+ 		}
+ 		return v_object(fields)
+@@ -92,16 +102,36 @@ fn v_value_from[T](value T) VValue {
+ 	}
+ }
+ 
+-fn v_array_element_schema[E](_ []E) VSchema {
++fn v_array_element_schema[E](_ []E, ancestors []voidptr, nil_types []string) VSchema {
+ 	$if E is $struct {
+-		return v_schema_from(E{})
++		return v_schema_from_tracked[E](E{}, ancestors, nil_types)
+ 	} $else {
+-		return v_schema_from($zero(E))
++		return v_schema_from_tracked[E]($zero(E), ancestors, nil_types)
+ 	}
+ }
+ 
+-fn v_schema_from[T](value T) VSchema {
+-	$if T is string {
++fn v_schema_from_tracked[T](value T, ancestors []voidptr, nil_types []string) VSchema {
++	$if T.unaliased_typ is voidptr {
++		return VSchema{}
++	} $else $if T is $pointer {
++		if isnil(value) {
++			// Empty arrays and nil references still expose their declared type.
++			// Stop a recursive nil type instead of expanding it indefinitely.
++			if T.name in nil_types {
++				return VSchema{}
++			}
++			mut next_types := nil_types.clone()
++			next_types << T.name
++			return v_schema_from_nil_pointee(value, ancestors, next_types)
++		}
++		address := unsafe { voidptr(value) }
++		if address in ancestors {
++			return VSchema{}
++		}
++		mut next := ancestors.clone()
++		next << address
++		return v_schema_from_pointee(value, next, nil_types)
++	} $else $if T is string {
+ 		return VSchema{
+ 			kind: .string_
+ 		}
+@@ -114,7 +144,7 @@ fn v_schema_from[T](value T) VSchema {
+ 			kind: .number
+ 		}
+ 	} $else $if T is $array {
+-		element := v_array_element_schema(value)
++		element := v_array_element_schema(value, ancestors, nil_types)
+ 		return VSchema{
+ 			kind:    .list
+ 			element: &element
+@@ -123,7 +153,7 @@ fn v_schema_from[T](value T) VSchema {
+ 		mut fields := map[string]VSchema{}
+ 		$for field in T.fields {
+ 			$if field.is_pub {
+-				fields[field.name] = v_schema_from(value.$(field.name))
++				fields[field.name] = v_schema_from_tracked(value.$(field.name), ancestors, nil_types)
+ 			}
+ 		}
+ 		return VSchema{
+ diff --git a/ui/vml_pointer_model.v b/ui/vml_pointer_model.v
+new file mode 100644
+index 0000000..e91cbda
+--- /dev/null
++++ b/ui/vml_pointer_model.v
+@@ -0,0 +1,36 @@
++module ui2
++
++// Track the current reference path, not a global visited set: two model fields
++// may legitimately point at the same object. Back-edges and nil values remain
++// invalid VML values and produce the usual source-line property-path error.
++fn v_value_from[T](value T) VValue {
++	return v_value_from_tracked[T](value, []voidptr{})
++}
++
++fn v_value_from_pointee[E](value &E, ancestors []voidptr) VValue {
++	$if E is $pointer {
++		return v_value_from_tracked[E](E(unsafe { voidptr(*value) }), ancestors)
++	} $else {
++		return v_value_from_tracked[E](*value, ancestors)
++	}
++}
++
++fn v_schema_from[T](value T) VSchema {
++	return v_schema_from_tracked[T](value, []voidptr{}, []string{})
++}
++
++fn v_schema_from_pointee[E](value &E, ancestors []voidptr, nil_types []string) VSchema {
++	$if E is $pointer {
++		return v_schema_from_tracked[E](E(unsafe { voidptr(*value) }), ancestors, nil_types)
++	} $else {
++		return v_schema_from_tracked[E](*value, ancestors, nil_types)
++	}
++}
++
++fn v_schema_from_nil_pointee[E](_ &E, ancestors []voidptr, nil_types []string) VSchema {
++	$if E is $pointer {
++		return v_schema_from_tracked[E](E(unsafe { nil }), ancestors, nil_types)
++	} $else {
++		return v_schema_from_tracked[E]($zero(E), ancestors, nil_types)
++	}
++}
+ diff --git a/ui/vml_pointer_model_test.v b/ui/vml_pointer_model_test.v
+new file mode 100644
+index 0000000..7d7f01d
+--- /dev/null
++++ b/ui/vml_pointer_model_test.v
+@@ -0,0 +1,112 @@
++module ui2
++
++pub struct PointerCounter {
++pub mut:
++	count int
++	next  &PointerCounter = unsafe { nil }
++}
++
++pub struct PointerCounterApp {
++pub mut:
++	counter &PointerCounter = unsafe { nil }
++	other   &PointerCounter = unsafe { nil }
++	items   []&PointerCounter
++}
++
++pub fn (mut app PointerCounterApp) increment() {
++	app.counter.count++
++}
++
++fn test_pointer_model_reads_live_values_after_an_action() {
++	counter := &PointerCounter{
++		count: 3
++	}
++	mut app := new_vml_app('Screen {
++		Label { text: app.counter.count }
++		Button { on_tap: app.increment() }
++	}', PointerCounterApp{
++		counter: counter
++	}) or { panic(err) }
++	built := app.build(rect(0, 0, 200, 100)) or { panic(err) }
++	assert built.children[0].text == '3'
++	app.handle(built.children[1].action_id) or { panic(err) }
++	assert counter.count == 4
++	assert (app.build(rect(0, 0, 200, 100)) or { panic(err) }).children[0].text == '4'
++}
++
++fn test_pointer_model_handles_shared_nested_and_cyclic_references() {
++	mut counter := &PointerCounter{
++		count: 3
++	}
++	counter.next = counter
++	model := PointerCounterApp{
++		counter: counter
++		other:   counter
++	}
++	root := element_from_vml_model('Label { text: app.counter.count + app.other.count }', model, rect(0,
++		0, 100, 30)) or { panic(err) }
++	assert root.text == '6.0'
++	counter.next = &PointerCounter{
++		count: 5
++	}
++	nested := element_from_vml_model('Label { text: app.counter.next.count }', model, rect(0, 0,
++		100, 30)) or { panic(err) }
++	assert nested.text == '5'
++}
++
++fn test_pointer_model_nil_path_returns_an_error_without_dereferencing() {
++	if _ := element_from_vml_model('Label { text: app.counter.count }', PointerCounterApp{}, rect(0,
++		0, 100, 30))
++	{
++		assert false, 'a nil counter must not be dereferenced'
++	} else {
++		assert err.msg().contains('app.counter.count')
++		assert err.msg().contains('line 1')
++	}
++	// A nil field that is not used by this template must be harmless.
++	assert (element_from_vml_model('Label { text: "OK" }', PointerCounterApp{}, rect(0, 0, 100, 30)) or {
++		panic(err)
++	}).text == 'OK'
++}
++
++fn test_pointer_model_arrays_validate_when_empty_and_render_when_populated() {
++	source := 'Column { Repeater { model: app.items key: item.count Label { text: item.count } } }'
++	empty := element_from_vml_model(source, PointerCounterApp{}, rect(0, 0, 100, 100)) or {
++		panic(err)
++	}
++	assert empty.children.len == 0
++	full := element_from_vml_model(source, PointerCounterApp{ items: [&PointerCounter{ count: 7 }] }, rect(0,
++		0, 100, 100)) or { panic(err) }
++	assert full.children[0].text == '7'
++	if _ := element_from_vml_model(source.replace('text: item.count', 'text: item.typo'), PointerCounterApp{}, rect(0,
++		0, 100, 100))
++	{
++		assert false, 'empty pointer arrays must still validate fields'
++	} else {
++		assert err.msg().contains('item.typo')
++	}
++}
++
++fn test_pointer_model_dereferences_scalar_and_multiple_indirections() {
++	number := 42
++	pointer := &number
++	assert v_value_from(pointer).number == 42
++	assert v_value_from(&pointer).number == 42
++	assert v_schema_from(&pointer).kind == .number
++	text := 'Hello'
++	assert v_value_from(&text).text == 'Hello'
++	flag := true
++	assert v_value_from(&flag).bool_
++	assert v_value_from(unsafe { nil }).kind == .invalid
++}
++
++fn test_pointer_model_multiple_nil_indirections_are_safe() {
++	nil_counter := unsafe { &PointerCounter(nil) }
++	assert v_value_from(&nil_counter).kind == .invalid
++	assert v_schema_from(&nil_counter).kind == .object
++	schema := v_schema_from(&nil_counter)
++	assert (schema.fields['count'] or { panic('missing count schema') }).kind == .number
++	nil_double := unsafe { &&PointerCounter(nil) }
++	assert v_schema_from(nil_double).kind == .object
++	assert v_value_from(nil_double).kind == .invalid
++}

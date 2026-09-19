@@ -1,0 +1,286 @@
+diff --git a/README.md b/README.md
+index e89c232..7ebab58 100644
+--- a/README.md
++++ b/README.md
+@@ -168,8 +168,10 @@ building rather than charging runtime VML for repeatedly parsing the file:
+ ```
+ 
+ Ordinary properties are one-way expressions. `bind.text` and `bind.checked`
+-write control edits back to a public mutable top-level model field. Public model
+-methods with no arguments, one `int`, or one `string` argument can be used as
++write control edits back to a public mutable model field, including nested struct
++paths such as `bind.text: app.profile.name`. Every field along the path must be
++public and mutable. Boolean and numeric bindings validate the leaf field type.
++Public model methods with no arguments, one `int`, or one `string` argument can be used as
+ actions:
+ 
+ ```vml
+ diff --git a/ui/vml_binding_path.v b/ui/vml_binding_path.v
+new file mode 100644
+index 0000000..1380e01
+--- /dev/null
++++ b/ui/vml_binding_path.v
+@@ -0,0 +1,71 @@
++module ui2
++
++// Validate every link before an editor can write through a nested struct.
++// Requiring public, mutable intermediate fields mirrors a direct V assignment.
++fn vml_writable_path_type[T](model T, parts []string, path string) !string {
++	if parts.len == 0 || parts[0].len == 0 {
++		return error('invalid app field `${path}`')
++	}
++	$for field in T.fields {
++		if field.name == parts[0] {
++			$if !field.is_pub {
++				return error('app field `${path}` is not public at `${field.name}`')
++			} $else $if !field.is_mut {
++				return error('app field `${path}` is not mutable at `${field.name}`')
++			} $else {
++				if parts.len == 1 {
++					return typeof(field).name
++				}
++				$if field.typ is $struct {
++					return vml_writable_path_type(model.$(field.name), parts[1..], path)
++				} $else {
++					return error('app field `${path}` cannot traverse `${field.name}`')
++				}
++			}
++		}
++	}
++	return error('unknown app field `${path}`')
++}
++
++fn vml_set_path[T](mut model T, parts []string, path string, value VValue) ! {
++	if parts.len == 0 || parts[0].len == 0 {
++		return error('invalid app field `${path}`')
++	}
++	$for field in T.fields {
++		if field.name == parts[0] {
++			$if !field.is_pub {
++				return error('app field `${path}` is not public at `${field.name}`')
++			} $else $if !field.is_mut {
++				return error('app field `${path}` is not mutable at `${field.name}`')
++			} $else {
++				if parts.len > 1 {
++					$if field.typ is $struct {
++						vml_set_path(mut model.$(field.name), parts[1..], path, value)!
++						return
++					} $else {
++						return error('app field `${path}` cannot traverse `${field.name}`')
++					}
++				}
++				$if field.typ is string {
++					model.$(field.name) = value.string_value()
++					return
++				} $else $if field.typ is bool {
++					model.$(field.name) = value.truthy()
++					return
++				} $else $if field.typ is int {
++					model.$(field.name) = int(value.numeric(0)!)
++					return
++				} $else $if field.typ is f64 {
++					model.$(field.name) = value.numeric(0)!
++					return
++				} $else $if field.typ is f32 {
++					model.$(field.name) = f32(value.numeric(0)!)
++					return
++				} $else {
++					return error('two-way binding does not support app field `${path}` of type `${typeof(field).name}`')
++				}
++			}
++		}
++	}
++	return error('unknown app field `${path}`')
++}
+ diff --git a/ui/vml_model.v b/ui/vml_model.v
+index 95f3b4b..e69f05e 100644
+--- a/ui/vml_model.v
++++ b/ui/vml_model.v
+@@ -1034,8 +1034,8 @@ fn v_eval_node(node &VNode, incoming_scope map[string]VValue, frame Rect, mut ev
+ 			return error('an element can only have one two-way binding at line ${node.line}')
+ 		}
+ 		property := key.all_after('bind.')
+-		if expr.kind != .path || !expr.value.starts_with('app.') || expr.value.count('.') != 1 {
+-			return error('`${key}` must target a mutable top-level app field at line ${expr.line}')
++		if expr.kind != .path || !expr.value.starts_with('app.') {
++			return error('`${key}` must target a public mutable app field path at line ${expr.line}')
+ 		}
+ 		resolved.props[property] = v_eval(expr, scope)!.string_value()
+ 		if resolved.id.len == 0 {
+@@ -1305,8 +1305,8 @@ fn v_validate_node_schema[T](node &VNode, incoming_scope map[string]VSchema) ! {
+ 		if property !in ['text', 'checked', 'active', 'pressed', 'value'] {
+ 			return error('two-way binding is not supported for `${property}` at line ${node.line}')
+ 		}
+-		if expr.kind != .path || !expr.value.starts_with('app.') || expr.value.count('.') != 1 {
+-			return error('`${key}` must target a mutable top-level app field at line ${expr.line}')
++		if expr.kind != .path || !expr.value.starts_with('app.') {
++			return error('`${key}` must target a public mutable app field path at line ${expr.line}')
+ 		}
+ 		v_schema_expression(expr, scope)!
+ 		target := expr.value.all_after('app.')
+@@ -1415,18 +1415,7 @@ pub fn element_from_vml_model[T](source string, model T, frame Rect) !Element {
+ }
+ 
+ fn vml_writable_field_type[T](name string) !string {
+-	$for field in T.fields {
+-		if field.name == name {
+-			$if !field.is_pub {
+-				return error('app field `${name}` is not public')
+-			} $else $if !field.is_mut {
+-				return error('app field `${name}` is not mutable')
+-			} $else {
+-				return typeof(field).name
+-			}
+-		}
+-	}
+-	return error('unknown app field `${name}`')
++	return vml_writable_path_type($zero(T), name.split('.'), name)
+ }
+ 
+ fn type_check_action[T](name string, args []VSchema, line int) ! {
+@@ -1458,33 +1447,7 @@ fn type_check_action[T](name string, args []VSchema, line int) ! {
+ }
+ 
+ fn vml_set_field[T](mut model T, name string, value VValue) ! {
+-	$for field in T.fields {
+-		if field.name == name {
+-			$if !field.is_pub {
+-				return error('app field `${name}` is not public')
+-			} $else $if !field.is_mut {
+-				return error('app field `${name}` is not mutable')
+-			} $else $if field.typ is string {
+-				model.$(field.name) = value.string_value()
+-				return
+-			} $else $if field.typ is bool {
+-				model.$(field.name) = value.truthy()
+-				return
+-			} $else $if field.typ is int {
+-				model.$(field.name) = int(value.numeric(0)!)
+-				return
+-			} $else $if field.typ is f64 {
+-				model.$(field.name) = value.numeric(0)!
+-				return
+-			} $else $if field.typ is f32 {
+-				model.$(field.name) = f32(value.numeric(0)!)
+-				return
+-			} $else {
+-				return error('two-way binding does not support app field `${name}` of type `${typeof(field).name}`')
+-			}
+-		}
+-	}
+-	return error('unknown app field `${name}`')
++	vml_set_path(mut model, name.split('.'), name, value)!
+ }
+ 
+ fn vml_dispatch[T](mut model T, invocation VmlInvocation) ! {
+ diff --git a/ui/vml_nested_binding_test.v b/ui/vml_nested_binding_test.v
+new file mode 100644
+index 0000000..8b3a8c9
+--- /dev/null
++++ b/ui/vml_nested_binding_test.v
+@@ -0,0 +1,105 @@
++module ui2
++
++pub struct NestedBindingValues {
++pub:
++	locked string
++pub mut:
++	name    string
++	checked bool
++	active  bool
++	pressed bool
++	level   f64
++	count   int
++	ratio   f32
++mut:
++	secret string
++}
++
++pub struct NestedBindingSection {
++pub mut:
++	values NestedBindingValues
++}
++
++pub struct NestedBindingApp {
++pub:
++	locked NestedBindingSection
++pub mut:
++	section NestedBindingSection
++	saved   string
++mut:
++	private_section NestedBindingSection
++}
++
++pub fn (mut app NestedBindingApp) save(name string) {
++	app.saved = name
++}
++
++fn test_nested_binding_reads_and_writes_before_invoking_action() {
++	source := 'TextInput { id: name multiline: false bind.text: app.section.values.name on_change: app.save(app.section.values.name) }'
++	mut app := new_vml_app(source, NestedBindingApp{
++		section: NestedBindingSection{
++			values: NestedBindingValues{
++				name: 'Before'
++			}
++		}
++	}) or { panic(err) }
++	app.control_text = fn (_ string) string {
++		return 'After'
++	}
++	built := app.build(rect(0, 0, 240, 36)) or { panic(err) }
++	assert built.text == 'Before'
++	app.handle(built.action_id) or { panic(err) }
++	assert app.state().section.values.name == 'After'
++	assert app.state().saved == 'After'
++	assert (app.build(rect(0, 0, 240, 36)) or { panic(err) }).text == 'After'
++}
++
++fn test_nested_binding_supports_boolean_and_numeric_controls() {
++	source := 'Screen {
++		Checkbox { bind.checked: app.section.values.checked }
++		Switch { bind.active: app.section.values.active }
++		ToggleButton { bind.pressed: app.section.values.pressed }
++		Slider { bind.value: app.section.values.level min: 0 max: 100 }
++		Slider { bind.value: app.section.values.count min: 0 max: 100 }
++		Slider { bind.value: app.section.values.ratio min: 0 max: 100 }
++	}'
++	mut app := new_vml_app(source, NestedBindingApp{}) or { panic(err) }
++	app.control_value = fn (_ string) f64 {
++		return 42.5
++	}
++	built := app.build(rect(0, 0, 300, 300)) or { panic(err) }
++	for child in built.children {
++		app.handle(child.action_id) or { panic(err) }
++	}
++	assert app.state().section.values.checked
++	assert app.state().section.values.active
++	assert app.state().section.values.pressed
++	assert app.state().section.values.level == 42.5
++	assert app.state().section.values.count == 42
++	assert app.state().section.values.ratio == f32(42.5)
++}
++
++fn test_nested_binding_rejects_private_readonly_and_unknown_paths() {
++	for path in ['locked.values.name', 'private_section.values.name', 'section.values.locked',
++		'section.values.secret', 'section.values.missing', 'section.values.name.len'] {
++		source := 'TextInput { bind.text: app.${path} }'
++		if _ := new_vml_app(source, NestedBindingApp{}) {
++			assert false, 'invalid binding ${path} was accepted'
++		}
++		mut model := NestedBindingApp{}
++		if _ := vml_set_field(mut model, path, v_string('no')) {
++			assert false, 'invalid write ${path} was accepted'
++		}
++		assert model.section.values.name == ''
++	}
++	if _ := new_vml_app('Checkbox { bind.checked: app.section.values.name }', NestedBindingApp{}) {
++		assert false, 'a nested string is not a bool'
++	} else {
++		assert err.msg().contains('requires a bool field')
++	}
++	if _ := new_vml_app('Slider { bind.value: app.section.values.name }', NestedBindingApp{}) {
++		assert false, 'a nested string is not numeric'
++	} else {
++		assert err.msg().contains('requires a numeric field')
++	}
++}

@@ -1,0 +1,231 @@
+diff --git a/ui/ui_immediate.c.v b/ui/ui_immediate.c.v
+index 9185290..975215f 100644
+--- a/ui/ui_immediate.c.v
++++ b/ui/ui_immediate.c.v
+@@ -48,6 +48,9 @@ $if (android || linux || ((macos || windows) && ui2_custom_rendering ?)) && !ui2
+ 
+ 	struct TouchState {
+ 	mut:
++		// A rebuild can move a dragged view away from the initial press.
++		// Keep its event identity until release instead of hit-testing it again.
++		pointer_target     HitTarget
+ 		down               bool
+ 		start_x            f64
+ 		start_y            f64
+@@ -635,6 +638,10 @@ $if (android || linux || ((macos || windows) && ui2_custom_rendering ?)) && !ui2
+ 				handle_touch_down(f64(e.mouse_x), f64(e.mouse_y))
+ 			}
+ 			.mouse_move {
++				if g_touch.down && g_touch.pointer_target.action_id.len > 0 {
++					handle_touch_move(f64(e.mouse_x), f64(e.mouse_y))
++					return
++				}
+ 				if menu_bar_handle_move(f64(e.mouse_x), f64(e.mouse_y)) {
+ 					return
+ 				}
+@@ -652,6 +659,10 @@ $if (android || linux || ((macos || windows) && ui2_custom_rendering ?)) && !ui2
+ 				handle_mouse_scroll(f64(e.mouse_x), f64(e.mouse_y), f64(e.scroll_y))
+ 			}
+ 			.mouse_up {
++				if g_touch.down && g_touch.pointer_target.action_id.len > 0 {
++					handle_touch_up(f64(e.mouse_x), f64(e.mouse_y))
++					return
++				}
+ 				if menu_bar_handle_up(f64(e.mouse_x), f64(e.mouse_y)) {
+ 					return
+ 				}
+@@ -674,6 +685,9 @@ $if (android || linux || ((macos || windows) && ui2_custom_rendering ?)) && !ui2
+ 					handle_touch_up(g_touch.current_x, g_touch.current_y)
+ 				}
+ 			}
++			.touches_cancelled, .unfocused, .suspended {
++				cancel_touch()
++			}
+ 			.char {
+ 				handle_char_input(e.char_code)
+ 			}
+@@ -732,6 +746,7 @@ $if (android || linux || ((macos || windows) && ui2_custom_rendering ?)) && !ui2
+ 			return
+ 		}
+ 		if target.action_id.len > 0 && (target.clickable || target.draggable) {
++			g_touch.pointer_target = target
+ 			fire_event(pointer_event_id('down', target.action_id, x, y))
+ 		}
+ 	}
+@@ -748,7 +763,11 @@ $if (android || linux || ((macos || windows) && ui2_custom_rendering ?)) && !ui2
+ 		}
+ 		g_touch.current_x = x
+ 		g_touch.current_y = y
+-		target := hit_test(g_touch.start_x, g_touch.start_y)
++		target := if g_touch.pointer_target.action_id.len > 0 {
++			g_touch.pointer_target
++		} else {
++			hit_test(g_touch.start_x, g_touch.start_y)
++		}
+ 		if target.slider {
+ 			commit_slider(target, x, y)
+ 			return
+@@ -802,8 +821,14 @@ $if (android || linux || ((macos || windows) && ui2_custom_rendering ?)) && !ui2
+ 		if !g_touch.down {
+ 			return
+ 		}
++		captured := g_touch.pointer_target
++		g_touch.pointer_target = HitTarget{}
+ 		g_touch.down = false
+-		slider_target := hit_test(g_touch.start_x, g_touch.start_y)
++		slider_target := if captured.action_id.len > 0 {
++			captured
++		} else {
++			hit_test(g_touch.start_x, g_touch.start_y)
++		}
+ 		if slider_target.slider {
+ 			commit_slider(slider_target, x, y)
+ 			return
+@@ -824,11 +849,15 @@ $if (android || linux || ((macos || windows) && ui2_custom_rendering ?)) && !ui2
+ 		if g_touch.long_press_fired || g_touch.scrollbar_drag {
+ 			return
+ 		}
+-		if g_open_dropdown.len > 0 {
++		if g_open_dropdown.len > 0 && captured.action_id.len == 0 {
+ 			handle_dropdown_release(x, y)
+ 			return
+ 		}
+-		mut target := hit_test(g_touch.start_x, g_touch.start_y)
++		mut target := if captured.action_id.len > 0 {
++			captured
++		} else {
++			hit_test(g_touch.start_x, g_touch.start_y)
++		}
+ 		dx := x - g_touch.start_x
+ 		if g_touch.moved && dx < -72 {
+ 			if target.action_id.len > 0 && target.swipe_left {
+@@ -883,6 +912,18 @@ $if (android || linux || ((macos || windows) && ui2_custom_rendering ?)) && !ui2
+ 		fire_event(target.action_id)
+ 	}
+ 
++	// Finish a captured gesture on focus loss/cancellation so an IDE drag cannot
++	// remain stuck. Ordinary taps are cancelled without activating a control.
++	fn cancel_touch() {
++		captured := g_touch.pointer_target
++		x := g_touch.current_x
++		y := g_touch.current_y
++		g_touch = TouchState{}
++		if captured.action_id.len > 0 {
++			fire_event(pointer_event_id('up', captured.action_id, x, y))
++		}
++	}
++
+ 	fn check_long_press() {
+ 		if !g_touch.down || g_touch.moved || g_touch.long_press_fired || g_touch.scrollbar_drag {
+ 			return
+ diff --git a/ui/ui_pointer_capture_immediate_test.v b/ui/ui_pointer_capture_immediate_test.v
+new file mode 100644
+index 0000000..1b7fabe
+--- /dev/null
++++ b/ui/ui_pointer_capture_immediate_test.v
+@@ -0,0 +1,105 @@
++// vfmt off
++@[has_globals]
++module ui2
++
++$if (android || linux || ((macos || windows) && ui2_custom_rendering ?)) && !ui2_headless ? {
++	import gg
++
++	__global pointer_capture_events = []string{}
++
++	fn capture_pointer_event(id string) {
++		pointer_capture_events << id
++	}
++
++	fn reset_pointer_capture_test() {
++		g_touch = TouchState{}
++		g_hit_targets = []HitTarget{}
++		g_event_handler = capture_pointer_event
++		g_scroll_handler = ScrollFn(unsafe { nil })
++		pointer_capture_events = []string{}
++		reset_scroll_frame()
++		close_dropdown()
++	}
++
++	fn test_drag_keeps_original_target_after_resize_handle_moves_and_is_covered() {
++		reset_pointer_capture_test()
++		// The IDE's 9px resize handles move outside the original press almost
++		// immediately. They identify themselves by action_id, not an element id.
++		g_hit_targets = [HitTarget{action_id: 'resize_widget', w: 9, h: 9, draggable: true}]
++		handle_touch_down(4, 4)
++		handle_touch_move(20, 20)
++		// Simulate the next frame rebuilding the hit targets at new coordinates.
++		g_hit_targets = [
++			HitTarget{action_id: 'resize_widget', x: 20, y: 20, w: 9, h: 9, draggable: true},
++			HitTarget{action_id: 'unrelated', w: 9, h: 9, slider: true},
++		]
++		handle_touch_move(50, 60)
++		handle_touch_up(70, 80)
++		assert pointer_capture_events == [
++			pointer_event_id('down', 'resize_widget', 4, 4),
++			pointer_event_id('drag', 'resize_widget', 20, 20),
++			pointer_event_id('drag', 'resize_widget', 50, 60),
++			pointer_event_id('up', 'resize_widget', 70, 80),
++		]
++		assert !g_touch.down
++		handle_touch_move(90, 90)
++		handle_touch_up(90, 90)
++		assert pointer_capture_events.len == 4
++	}
++
++	fn test_capture_is_released_and_the_next_press_uses_the_new_target() {
++		reset_pointer_capture_test()
++		g_hit_targets = [HitTarget{action_id: 'first', w: 20, h: 20, clickable: true}]
++		handle_touch_down(5, 5)
++		g_hit_targets = [HitTarget{action_id: 'second', w: 20, h: 20, clickable: true}]
++		handle_touch_up(5, 5)
++		handle_touch_down(5, 5)
++		handle_touch_up(5, 5)
++		assert pointer_capture_events == [
++			pointer_event_id('down', 'first', 5, 5),
++			pointer_event_id('up', 'first', 5, 5),
++			pointer_event_id('down', 'second', 5, 5),
++			pointer_event_id('up', 'second', 5, 5),
++		]
++	}
++
++	fn test_capture_survives_a_frame_with_no_hit_targets_and_cancels_on_focus_loss() {
++		reset_pointer_capture_test()
++		g_hit_targets = [HitTarget{action_id: 'drag', w: 20, h: 20, draggable: true}]
++		handle_touch_down(5, 5)
++		g_hit_targets = []HitTarget{}
++		on_event(&gg.Event{typ: .mouse_move, mouse_x: 40, mouse_y: 50}, &GgApp{})
++		on_event(&gg.Event{typ: .unfocused}, &GgApp{})
++		assert pointer_capture_events == [
++			pointer_event_id('down', 'drag', 5, 5),
++			pointer_event_id('drag', 'drag', 40, 50),
++			pointer_event_id('up', 'drag', 40, 50),
++		]
++		assert !g_touch.down
++		on_event(&gg.Event{typ: .mouse_up, mouse_x: 40, mouse_y: 50}, &GgApp{})
++		assert pointer_capture_events.len == 3
++	}
++
++	fn test_cancelling_an_ordinary_button_does_not_activate_it() {
++		reset_pointer_capture_test()
++		g_hit_targets = [HitTarget{action_id: 'button', w: 20, h: 20}]
++		handle_touch_down(5, 5)
++		on_event(&gg.Event{typ: .touches_cancelled}, &GgApp{})
++		handle_touch_up(5, 5)
++		assert pointer_capture_events.len == 0
++		assert !g_touch.down
++	}
++
++	fn test_scrollbar_drag_takes_precedence_over_view_capture() {
++		reset_pointer_capture_test()
++		frame := rect(0, 0, 100, 100)
++		register_scroll_view('pane', frame, frame, 400, true, true, true)
++		g_hit_targets = [HitTarget{action_id: 'view', w: 100, h: 100, draggable: true}]
++		bar := scrollbar_geometry(frame, 400, 0, true)
++		handle_touch_down(bar.thumb.x + 1, bar.thumb.y + 1)
++		assert g_touch.scrollbar_drag
++		handle_touch_move(bar.thumb.x + 1, 60)
++		handle_touch_up(bar.thumb.x + 1, 60)
++		assert pointer_capture_events.len == 0
++	}
++}
