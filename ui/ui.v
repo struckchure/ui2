@@ -353,6 +353,10 @@ pub:
 	box                   BoxStyle
 	text_style            TextStyle
 	native_style          bool // button: let the platform own bezel and interaction styling
+	// Transient state supplied by split-process backends so their renderer can
+	// paint the caret and selection owned by the input backend.
+	focused               bool
+	text_selection         TextSelection
 	text_runs             []TextRun // text_area: optional rich text style runs
 	keyboard              int
 	emit_change           bool
