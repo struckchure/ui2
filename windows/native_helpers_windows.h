@@ -117,6 +117,7 @@ static inline int ui2_win_apply_cursor(void *hwnd) {
 	case 3: identifier = IDC_SIZENESW; break;
 	case 4: identifier = IDC_SIZEWE; break;
 	case 5: identifier = IDC_SIZENS; break;
+	case 6: identifier = IDC_CROSS; break;
 	default: break;
 	}
 	if (identifier == NULL) return 0;

@@ -1294,6 +1294,7 @@ fn windows_cursor_code(cursor string) int {
 		cursor_resize_nesw { 3 }
 		cursor_resize_ew { 4 }
 		cursor_resize_ns { 5 }
+		cursor_crosshair { 6 }
 		else { 0 }
 	}
 }

@@ -202,6 +202,7 @@ fn native_cursor(name string) macos.Id {
 		'resize_nesw' { native_private_cursor('_windowResizeNorthEastSouthWestCursor', macos.msg_id(cursor_class, 'crosshairCursor')) }
 		'resize_ew' { macos.msg_id(cursor_class, 'resizeLeftRightCursor') }
 		'resize_ns' { macos.msg_id(cursor_class, 'resizeUpDownCursor') }
+		'crosshair' { macos.msg_id(cursor_class, 'crosshairCursor') }
 		'rotate' { macos.msg_id(cursor_class, 'openHandCursor') }
 		else { macos.msg_id(cursor_class, 'arrowCursor') }
 	}

@@ -471,6 +471,7 @@ pub const cursor_resize_nwse = 'resize_nwse'
 pub const cursor_resize_nesw = 'resize_nesw'
 pub const cursor_resize_ew = 'resize_ew'
 pub const cursor_resize_ns = 'resize_ns'
+pub const cursor_crosshair = 'crosshair'
 pub const cursor_rotate = 'rotate'
 
 pub fn rect(x f64, y f64, width f64, height f64) Rect {
