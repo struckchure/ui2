@@ -1,6 +1,6 @@
 # UI2 Studio
 
-<img width="400" alt="image" src="https://github.com/user-attachments/assets/db98f044-b0a3-4f93-8ba8-d9ae39cb1ee4" />
+<img width="1200" alt="UI2 Studio running with native macOS controls" src="../docs/images/ide-macos.png" />
 
 
 `ide/` is a Delphi/Lazarus-style visual form designer implemented entirely in
