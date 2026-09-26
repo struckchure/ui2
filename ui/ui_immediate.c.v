@@ -110,6 +110,7 @@ $if (android || linux || ((macos || windows) && ui2_custom_rendering ?)) && !ui2
 	__global g_text_props = map[string]string{}
 	__global g_text_editors = map[string]TextEditor{}
 	__global g_text_kinds = map[string]Kind{}
+	__global g_text_secure = map[string]bool{}
 	__global g_slider_values = map[string]f64{}
 	__global g_slider_declared = map[string]f64{}
 	__global g_slider_specs = map[string]SliderSpec{}
@@ -203,6 +204,7 @@ $if (android || linux || ((macos || windows) && ui2_custom_rendering ?)) && !ui2
 		g_text_props.delete(id)
 		g_text_editors.delete(id)
 		g_text_kinds.delete(id)
+		g_text_secure.delete(id)
 	}
 
 	// ── Public API ─────────────────────────────────────────────────────
@@ -1275,6 +1277,13 @@ $if (android || linux || ((macos || windows) && ui2_custom_rendering ?)) && !ui2
 			return false
 		}
 		id := g_focused_field
+		// A secure field keeps its plaintext in the editor and only masks at draw
+		// time, so exporting the selection would publish the password. Consume the
+		// chord without touching the clipboard, the text or the selection. Paste
+		// stays available.
+		if key != .v && (g_text_secure[id] or { false }) {
+			return true
+		}
 		mut cb := system_clipboard()
 		match key {
 			.c {
@@ -2059,6 +2068,7 @@ fn page_focused_text_area(direction int) {
 					replace_text_prop(el.id, el.text)
 				}
 				g_text_kinds[el.id] = el.kind
+				g_text_secure[el.id] = el.secure
 				g_active_fields[el.id] = true
 				current_text := g_text_values[el.id] or { el.text }
 				mut editor := g_text_editors[el.id] or { text_editor(current_text.clone()) }
@@ -2129,6 +2139,7 @@ fn page_focused_text_area(direction int) {
 					replace_text_prop(el.id, el.text)
 				}
 				g_text_kinds[el.id] = el.kind
+				g_text_secure[el.id] = el.secure
 				g_active_fields[el.id] = true
 				current_text := g_text_values[el.id] or { el.text }
 				draw_control_surface(ctx, x, y, el.frame.width, el.frame.height, el.box,
